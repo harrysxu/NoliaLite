@@ -1,0 +1,10 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+.DS_Store
+*.log
+test-results/
+coverage/
+*.tsbuildinfo
+src-tauri/gen/schemas/
