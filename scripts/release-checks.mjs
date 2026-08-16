@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const limitBytes = 25 * 1024 * 1024;
+const releaseRoot = process.env.TAURI_TARGET
+  ? path.join(root, "src-tauri", "target", process.env.TAURI_TARGET, "release")
+  : path.join(root, "src-tauri", "target", "release");
 const results = [];
 
 function check(condition, message) {
@@ -102,8 +105,8 @@ const distBytes = await directorySize(distPath);
 
 let bundleSummary = "not checked on this platform";
 if (process.platform === "darwin") {
-  const appPath = path.join(root, "src-tauri/target/release/bundle/macos/Nolia Lite.app");
-  const dmgDirectory = path.join(root, "src-tauri/target/release/bundle/dmg");
+  const appPath = path.join(releaseRoot, "bundle", "macos", "Nolia Lite.app");
+  const dmgDirectory = path.join(releaseRoot, "bundle", "dmg");
   check(existsSync(appPath), "macOS bundle: .app exists");
   const appBytes = await directorySize(appPath);
   check(appBytes <= limitBytes, "macOS bundle: .app is within 25 MB");

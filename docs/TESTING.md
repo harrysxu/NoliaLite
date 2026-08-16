@@ -1,9 +1,9 @@
 # Nolia Lite 测试与发布
 
-> 版本：0.1.0
+> 版本：1.0.0
 > 最近执行：2026-08-16
 > 依据：[产品需求](./PRODUCT_REQUIREMENTS.md)、[UI/UX 规格](./UI_UX_SPEC.md)、[技术方案](./TECHNICAL_DESIGN.md)
-> 首发平台：macOS arm64
+> 首发平台：macOS arm64 / x86_64
 
 ## 1. 目标
 
@@ -84,9 +84,10 @@ npm run test:release
 | 生产依赖审计 | `PASS`，0 vulnerabilities |
 | 前端生产构建 | `PASS` |
 | release 静态与产物检查 | `PASS`，37 项检查 |
-| macOS 应用构建 | `PASS`，`.app` 11.84 MB |
-| macOS DMG | `PASS`，5.83 MB |
-| 本机 ad-hoc 签名 | `PASS`，`codesign --verify --deep --strict` |
+| macOS 应用构建 | `PASS`，arm64 / x86_64 |
+| macOS DMG | `PASS`，arm64 / x86_64，均小于 25 MB |
+| Developer ID 签名 | `PASS`，两个架构均通过 `codesign --verify --deep --strict` |
+| Apple 公证与装订 | `PASS`，两个 DMG 均为 `Accepted` 并通过 Gatekeeper |
 
 最终安装版已通过 Computer Use 页面复测：
 
