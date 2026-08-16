@@ -28,10 +28,14 @@ thiserror = "2.0.17"
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
 tauri = { version = "2.11.1", features = ["macos-private-api"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSDictionary", "NSString", "NSURL"] }
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-app-kit", "WKWebView"] }
+objc2 = "0.6.4"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-core-services = { version = "0.3.2", default-features = false, features = ["std", "AE", "AppleEvents", "objc2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-services", "NSData", "NSError", "NSAppleEventDescriptor", "NSAppleEventManager", "NSObject", "NSDictionary", "NSNotification", "NSString", "NSURL"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKPDFConfiguration", "WKWebView"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38.2"

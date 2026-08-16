@@ -20,8 +20,9 @@ describe("document export", () => {
       <div class="mermaid-block is-selected"><textarea>source</textarea><div class="mermaid-block-svg"><svg><text>Flow</text></svg></div></div>
       <div class="protected-source"><div class="protected-source-label">Frontmatter</div><textarea>---\ntitle: Test\n---</textarea></div>
       <p contenteditable="true" tabindex="0" aria-label="paragraph">Text</p>
-      <p><strong class="is-markdown-syntax-hidden-inline">Rendered bold</strong><span class="markdown-inline-session">**Rendered bold**</span></p>
+      <p><strong>Rendered bold</strong></p>
       <a href="javascript:alert(1)" onclick="alert(2)">unsafe link</a>
+      <a href="vbscript:alert(3)">unsafe legacy link</a>
     `;
 
     const html = snapshotEditorHtml(root);
@@ -29,9 +30,8 @@ describe("document export", () => {
     expect(html).not.toContain("is-selected");
     expect(html).not.toContain("contenteditable");
     expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("vbscript:");
     expect(html).not.toContain("onclick");
-    expect(html).not.toContain("markdown-inline-session");
-    expect(html).not.toContain("is-markdown-syntax-hidden-inline");
     expect(html).toContain("<svg><text>Flow</text></svg>");
     expect(html).toContain("Rendered bold");
     expect(html).toContain("title: Test");

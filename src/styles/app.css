@@ -191,97 +191,153 @@
   color: var(--danger);
 }
 
-.empty-state {
-  width: min(440px, calc(100% - 48px));
-  margin: clamp(88px, 18vh, 148px) auto 48px;
-}
-
-.empty-state h1 {
-  margin: 0 0 26px;
-  color: var(--text);
-  font-size: 20px;
-  font-weight: 650;
-  line-height: 1.3;
-  text-align: center;
-}
-
-.empty-actions {
+.history-view {
   display: flex;
-  justify-content: center;
-  gap: 8px;
+  min-height: 0;
+  flex: 1 1 auto;
+  background: var(--surface);
 }
 
-.empty-actions button {
-  display: inline-flex;
-  height: 38px;
+.history-sidebar {
+  display: flex;
+  width: 328px;
+  min-width: 280px;
+  height: 100%;
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.history-header {
+  display: flex;
+  height: 46px;
+  flex: 0 0 46px;
   align-items: center;
-  gap: 8px;
-  padding: 0 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--surface);
+  justify-content: space-between;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-header h1 {
+  margin: 0;
   color: var(--text);
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 650;
 }
 
-.empty-actions button:first-child {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #ffffff;
+.history-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
-.empty-actions button:hover {
-  filter: brightness(0.97);
+.history-actions button,
+.history-remove {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
 }
 
-.recent-section {
-  margin-top: 54px;
+.history-actions button:hover:not(:disabled),
+.history-remove:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
-.recent-section h2 {
-  margin: 0 0 7px;
+.history-actions button:disabled {
+  color: var(--text-faint);
+  cursor: default;
+  opacity: 0.45;
+}
+
+.history-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 0 18px;
+}
+
+.history-section + .history-section {
+  margin-top: 12px;
+}
+
+.history-section h2 {
+  margin: 0;
+  padding: 7px 14px 5px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 650;
 }
 
-.recent-list {
-  border-top: 1px solid var(--border);
+.history-section ul {
+  margin: 0;
+  padding: 0 6px;
+  list-style: none;
 }
 
-.recent-list button {
+.history-section li {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+}
+
+.history-entry {
   display: grid;
   width: 100%;
-  height: 44px;
+  height: 42px;
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-row: 1;
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px;
+  gap: 7px;
+  padding: 0 38px 0 8px;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   text-align: left;
 }
 
-.recent-list button:hover {
+.history-entry:hover {
   background: var(--hover);
 }
 
-.recent-list button > span {
+.history-entry > span {
   overflow: hidden;
+  min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.recent-list button time {
+.history-entry time {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
-.recent-list button.is-missing {
+.history-entry.is-missing {
   color: var(--text-muted);
+}
+
+.history-remove {
+  z-index: 1;
+  grid-column: 2;
+  grid-row: 1;
+  opacity: 0;
+}
+
+.history-section li:hover .history-remove,
+.history-section li:focus-within .history-remove {
+  opacity: 1;
 }
 
 .document-view {
@@ -291,6 +347,63 @@
   overflow: auto;
   background: var(--surface);
   overscroll-behavior-y: contain;
+}
+
+html.is-pdf-exporting,
+html.is-pdf-exporting body,
+html.is-pdf-exporting #root,
+html.is-pdf-exporting .app-shell,
+html.is-pdf-exporting .document-view {
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+  background: #ffffff !important;
+}
+
+html.is-pdf-exporting .title-bar,
+html.is-pdf-exporting .history-view,
+html.is-pdf-exporting .status-banner,
+html.is-pdf-exporting .find-bar,
+html.is-pdf-exporting .dialog-backdrop,
+html.is-pdf-exporting .diagram-viewer-layer,
+html.is-pdf-exporting .selection-toolbar,
+html.is-pdf-exporting .table-toolbar,
+html.is-pdf-exporting .code-language-control,
+html.is-pdf-exporting .link-editor-popover,
+html.is-pdf-exporting .table-insert-backdrop,
+html.is-pdf-exporting .table-resize-picker,
+html.is-pdf-exporting textarea {
+  display: none !important;
+}
+
+html.is-pdf-exporting .editor-host,
+html.is-pdf-exporting .nolia-editor {
+  box-sizing: border-box;
+  width: auto !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+html.is-pdf-exporting .editor-host {
+  padding: 48px 56px 64px !important;
+}
+
+html.is-pdf-exporting .rendered-editor[hidden] {
+  display: block !important;
+}
+
+html.is-pdf-exporting .nolia-editor {
+  color: #222222 !important;
+}
+
+html.is-pdf-exporting .nolia-editor .is-selected,
+html.is-pdf-exporting .nolia-editor .is-editing,
+html.is-pdf-exporting .nolia-editor .selectedCell,
+html.is-pdf-exporting .nolia-editor .ProseMirror-selectednode {
+  outline: 0 !important;
+  box-shadow: none !important;
 }
 
 @media print {
@@ -313,6 +426,7 @@
   }
 
   .title-bar,
+  .history-view,
   .status-banner,
   .find-bar,
   .dialog-backdrop,
@@ -323,7 +437,6 @@
   .link-editor-popover,
   .table-insert-backdrop,
   .table-resize-picker,
-  .markdown-inline-session,
   textarea {
     display: none !important;
   }
@@ -334,6 +447,10 @@
     max-width: none !important;
     margin: 0 !important;
     padding: 0 !important;
+  }
+
+  .rendered-editor[hidden] {
+    display: block !important;
   }
 
   .nolia-editor {
@@ -536,7 +653,8 @@
     margin-right: 12px;
   }
 
-  .empty-state {
-    margin-top: 72px;
+  .history-sidebar {
+    width: min(328px, 72vw);
+    min-width: 260px;
   }
 }

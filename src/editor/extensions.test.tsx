@@ -2,11 +2,32 @@
 
 import { Editor, type JSONContent } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createEditorExtensions } from "./extensions";
+import { createEditorExtensions, isAllowedLink } from "./extensions";
+
+const imageBridge = vi.hoisted(() => ({
+  storeDocumentImage: vi.fn(async () => "assets/cover.png")
+}));
+
+vi.mock("../bridge/tauriClient", () => ({
+  readLocalImage: vi.fn(async () => undefined),
+  storeDocumentImage: imageBridge.storeDocumentImage
+}));
+
+beforeEach(() => {
+  imageBridge.storeDocumentImage.mockClear();
+});
 
 describe("Markdown editor extensions", () => {
+  it("allows document-local links and rejects paths the backend cannot resolve", () => {
+    expect(isAllowedLink("./next.md#section")).toBe(true);
+    expect(isAllowedLink("next.md#section")).toBe(true);
+    expect(isAllowedLink("#section")).toBe(true);
+    expect(isAllowedLink("../outside.md")).toBe(false);
+    expect(isAllowedLink("/absolute.md")).toBe(false);
+  });
+
   it.each([
     ["# ", "heading"],
     ["> ", "blockquote"],
@@ -120,6 +141,70 @@ describe("Markdown editor extensions", () => {
     expect(target.state.doc.firstChild?.firstChild?.marks[0]?.type.name).toBe("bold");
     source.destroy();
     target.destroy();
+  });
+
+  it("stores pasted image bytes and inserts a relative Markdown image", async () => {
+    const editor = new Editor({ extensions: createEditorExtensions("/tmp/note.md"), content: "" });
+    const file = {
+      name: "cover.png",
+      type: "image/png",
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer
+    } as File;
+    const event = {
+      clipboardData: { files: [file], getData: () => "" },
+      preventDefault: vi.fn()
+    } as unknown as ClipboardEvent;
+
+    expect(runPaste(editor, event)).toBe(true);
+    await vi.waitFor(() => expect(imageBridge.storeDocumentImage).toHaveBeenCalledWith(
+      "/tmp/note.md",
+      "cover.png",
+      Uint8Array.from([1, 2, 3])
+    ));
+    await vi.waitFor(() => {
+      let imageSource = "";
+      editor.state.doc.descendants((node) => {
+        if (node.type.name === "image") imageSource = String(node.attrs.src);
+      });
+      expect(imageSource).toBe("assets/cover.png");
+    });
+    editor.destroy();
+  });
+
+  it("does not store pasted image bytes in a read-only document", () => {
+    const editor = new Editor({
+      extensions: createEditorExtensions("/tmp/note.md", undefined, false),
+      content: "",
+      editable: false
+    });
+    const file = {
+      name: "cover.png",
+      type: "image/png",
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer
+    } as File;
+    const event = {
+      clipboardData: { files: [file], getData: () => "" },
+      preventDefault: vi.fn()
+    } as unknown as ClipboardEvent;
+
+    expect(runPaste(editor, event)).toBe(false);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(imageBridge.storeDocumentImage).not.toHaveBeenCalled();
+    editor.destroy();
+  });
+
+  it("does not handle Markdown text paste in a read-only document", () => {
+    const editor = new Editor({
+      extensions: createEditorExtensions(undefined, undefined, false),
+      content: "<p>原文</p>",
+      editable: false
+    });
+    const event = pasteEvent("# 不应插入", "");
+
+    expect(runPaste(editor, event)).toBe(false);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(editor.state.doc.textContent).toBe("原文");
+    editor.destroy();
   });
 });
 

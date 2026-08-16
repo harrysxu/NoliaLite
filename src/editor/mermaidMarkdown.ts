@@ -47,7 +47,7 @@ const mermaidFenceDirectives = new Map<string, string>([
   ["xychart-beta", "xychart-beta"]
 ]);
 
-export function mermaidFenceDirective(info: string | undefined): string | undefined {
+function mermaidFenceDirective(info: string | undefined): string | undefined {
   const language = info?.trim().split(/\s+/, 1)[0].toLowerCase();
   return language ? mermaidFenceDirectives.get(language) : undefined;
 }

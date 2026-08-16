@@ -9,7 +9,7 @@ export const TRACKING_ATTRIBUTES = ["sourceRaw", "sourceCanonical", "sourceIndex
 
 export type ProtectedKind = "frontmatter" | "html" | "unsupported";
 
-export type SourceUnit = {
+type SourceUnit = {
   raw: string;
   kind: "editable" | "mermaid" | "math" | "htmlPreview" | "footnote" | ProtectedKind;
   markdown?: string;
@@ -131,7 +131,7 @@ function stripTrackingAttributes(node: JSONContent): JSONContent {
   return clean;
 }
 
-export function canonicalNode(node: JSONContent): string {
+function canonicalNode(node: JSONContent): string {
   return JSON.stringify(stripTrackingAttributes(node));
 }
 

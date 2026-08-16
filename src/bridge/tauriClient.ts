@@ -29,6 +29,18 @@ export async function pickMarkdownFiles(): Promise<string[]> {
   return typeof selected === "string" ? [selected] : selected;
 }
 
+export async function pickImageFiles(): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  const selected = await open({
+    multiple: true,
+    directory: false,
+    title: "插入图片",
+    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg"] }]
+  });
+  if (!selected) return [];
+  return typeof selected === "string" ? [selected] : selected;
+}
+
 export async function pickMarkdownSavePath(defaultPath: string): Promise<string | undefined> {
   if (!isTauriRuntime()) return undefined;
   const selected = await save({
@@ -63,7 +75,10 @@ export async function writeExportDocument(request: ExportDocumentRequest): Promi
 
 export async function exportPdf(filePath: string): Promise<string | undefined> {
   if (!isTauriRuntime()) return undefined;
-  return invoke<string>("export_pdf", { filePath });
+  const root = document.documentElement;
+  const captureWidth = Math.ceil(Math.max(root.scrollWidth, root.clientWidth, 1));
+  const captureHeight = Math.ceil(Math.max(root.scrollHeight, root.clientHeight, 1));
+  return invoke<string>("export_pdf", { filePath, captureWidth, captureHeight });
 }
 
 export async function readDocument(filePath: string): Promise<ReadDocumentResult> {
@@ -83,6 +98,14 @@ export async function readLocalImage(documentPath: string, imageSource: string):
   return invoke<string>("read_local_image", { documentPath, imageSource });
 }
 
+export async function importDocumentImage(documentPath: string, imagePath: string): Promise<string> {
+  return invoke<string>("import_document_image", { documentPath, imagePath });
+}
+
+export async function storeDocumentImage(documentPath: string, fileName: string, bytes: Uint8Array): Promise<string> {
+  return invoke<string>("store_document_image", { documentPath, fileName, bytes: Array.from(bytes) });
+}
+
 export async function resolveMarkdownLink(documentPath: string, targetPath: string): Promise<string> {
   return invoke<string>("resolve_markdown_link", { documentPath, targetPath });
 }
@@ -100,9 +123,9 @@ export async function watchDocument(filePath: string): Promise<void> {
   await invoke("watch_document", { filePath });
 }
 
-export async function stopDocumentWatch(): Promise<void> {
+export async function stopDocumentWatch(filePath?: string): Promise<void> {
   if (!isTauriRuntime()) return;
-  await invoke("stop_document_watch");
+  await invoke("stop_document_watch", { filePath });
 }
 
 export async function onDocumentFileEvent(handler: (filePath: string) => void): Promise<UnlistenFn> {
@@ -135,6 +158,11 @@ export async function removeRecentFile(filePath: string): Promise<RecentFile[]> 
   return invoke<RecentFile[]>("remove_recent_file", { filePath });
 }
 
+export async function clearRecentFiles(): Promise<RecentFile[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<RecentFile[]>("clear_recent_files");
+}
+
 export async function setWindowTitle(title: string): Promise<void> {
   if (!isTauriRuntime()) {
     document.title = title;
@@ -147,12 +175,21 @@ export async function openDocumentWindows(paths: string[]): Promise<void> {
   if (isTauriRuntime() && paths.length) await invoke("open_document_windows", { paths });
 }
 
+export async function openDocumentWindowAt(filePath: string, fragment: string): Promise<void> {
+  if (isTauriRuntime()) await invoke("open_document_window_at", { filePath, fragment });
+}
+
 export async function createDocumentWindow(): Promise<void> {
   if (isTauriRuntime()) await invoke("create_document_window");
 }
 
 export async function setWindowDocument(filePath?: string): Promise<void> {
   if (isTauriRuntime()) await invoke("set_window_document", { filePath });
+}
+
+export async function focusExistingDocumentWindow(filePath: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  return invoke<boolean>("focus_existing_document_window", { filePath });
 }
 
 export async function closeCurrentWindow(): Promise<void> {
@@ -165,16 +202,22 @@ export async function answerQuitRequest(requestId: number, allowed: boolean): Pr
 
 export async function onOpenDocumentPaths(handler: (paths: string[]) => void): Promise<UnlistenFn> {
   if (!isTauriRuntime()) return () => undefined;
-  return getCurrentWindow().listen<string[]>("open-document-paths", (event) => {
-    void takePendingOpenPaths()
-      .then((paths) => handler(paths.length ? paths : event.payload))
-      .catch(() => handler(event.payload));
-  });
+  return getCurrentWindow().listen<string[]>("open-document-paths", (event) => handler(event.payload));
 }
 
 export async function takePendingOpenPaths(): Promise<string[]> {
   if (!isTauriRuntime()) return [];
   return invoke<string[]>("take_pending_open_paths");
+}
+
+export async function onNavigateDocumentHeading(handler: (fragment: string) => void): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) return () => undefined;
+  return getCurrentWindow().listen<string>("navigate-document-heading", (event) => handler(event.payload));
+}
+
+export async function takePendingHeadingFragment(): Promise<string | undefined> {
+  if (!isTauriRuntime()) return undefined;
+  return invoke<string | undefined>("take_pending_heading_fragment");
 }
 
 export async function onMenuCommand(handler: (command: string) => void): Promise<UnlistenFn> {
@@ -189,9 +232,9 @@ export async function onWindowFileDrop(handler: (paths: string[]) => void): Prom
   });
 }
 
-export async function onCloseRequested(handler: (preventDefault: () => void) => void): Promise<UnlistenFn> {
+export async function onCloseRequested(handler: () => void): Promise<UnlistenFn> {
   if (!isTauriRuntime()) return () => undefined;
-  return getCurrentWindow().listen("close-requested", () => handler(() => undefined));
+  return getCurrentWindow().listen("close-requested", handler);
 }
 
 export async function onQuitRequested(handler: (requestId: number) => void): Promise<UnlistenFn> {

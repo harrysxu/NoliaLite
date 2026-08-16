@@ -15,18 +15,37 @@ use std::{
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{
     Emitter, Manager, PhysicalPosition, WebviewWindow, WebviewWindowBuilder,
-    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID},
 };
+
+#[cfg(target_os = "macos")]
+use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+#[cfg(target_os = "macos")]
+use objc2_core_services::{kAEOpenDocuments, kCoreEventClass, keyDirectObject};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{
+    NSAppleEventDescriptor, NSAppleEventManager,
+    NSAppleEventManagerWillProcessFirstEventNotification, NSNotification, NSNotificationCenter,
+    NSObject, NSObjectProtocol,
+};
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
 
 struct WindowRegistry {
     pending_paths: Mutex<HashMap<String, Vec<String>>>,
+    pending_fragments: Mutex<HashMap<String, String>>,
     ready: Mutex<HashSet<String>>,
     documents: Mutex<HashMap<String, String>>,
     next_label: AtomicU64,
 }
 
+struct WatchedDocument {
+    target: PathBuf,
+    _watcher: RecommendedWatcher,
+}
+
 #[derive(Default)]
-struct DocumentWatchState(Mutex<HashMap<String, RecommendedWatcher>>);
+struct DocumentWatchState(Mutex<HashMap<String, WatchedDocument>>);
 
 struct QuitRequest {
     id: u64,
@@ -48,6 +67,7 @@ impl WindowRegistry {
         }
         Self {
             pending_paths: Mutex::new(pending_paths),
+            pending_fragments: Mutex::new(HashMap::new()),
             ready: Mutex::new(HashSet::new()),
             documents: Mutex::new(HashMap::new()),
             next_label: AtomicU64::new(1),
@@ -82,6 +102,20 @@ impl WindowRegistry {
             .contains(label)
     }
 
+    fn queue_fragment(&self, label: &str, fragment: String) {
+        self.pending_fragments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(label.to_string(), fragment);
+    }
+
+    fn take_fragment(&self, label: &str) -> Option<String> {
+        self.pending_fragments
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(label)
+    }
+
     fn set_document(&self, label: &str, file_path: Option<String>) {
         let mut documents = self
             .documents
@@ -105,6 +139,10 @@ impl WindowRegistry {
 
     fn remove(&self, label: &str) {
         self.pending_paths
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(label);
+        self.pending_fragments
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(label);
@@ -155,16 +193,129 @@ fn dispatch_open_paths(app: &tauri::AppHandle, paths: Vec<String>) {
     if paths.is_empty() {
         return;
     }
+    let registry = app.state::<WindowRegistry>();
     let Some(window) = focused_window(app) else {
+        registry.queue("main", paths);
         return;
     };
     let label = window.label().to_string();
-    let registry = app.state::<WindowRegistry>();
-    registry.queue(&label, paths.clone());
     focus_window(&window);
     if registry.is_ready(&label) {
-        let _ = window.emit("open-document-paths", paths);
+        let _ = window.emit_to(window.label(), "open-document-paths", paths);
+    } else {
+        registry.queue(&label, paths);
     }
+}
+
+#[cfg(target_os = "macos")]
+static MACOS_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+#[cfg(target_os = "macos")]
+static MACOS_PENDING_PATHS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[cfg(target_os = "macos")]
+fn dispatch_or_queue_macos_paths(paths: Vec<String>) {
+    let paths = markdown_paths(paths);
+    if paths.is_empty() {
+        return;
+    }
+    if let Some(app) = MACOS_APP_HANDLE.get() {
+        dispatch_open_paths(app, paths);
+    } else {
+        MACOS_PENDING_PATHS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .extend(paths);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_open_event_handler(handler: &MacOpenEventHandler) {
+    let manager = NSAppleEventManager::sharedAppleEventManager();
+    unsafe {
+        manager.setEventHandler_andSelector_forEventClass_andEventID(
+            handler,
+            sel!(handleOpenDocuments:withReplyEvent:),
+            kCoreEventClass,
+            kAEOpenDocuments,
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+define_class!(
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    struct MacOpenEventHandler;
+
+    unsafe impl NSObjectProtocol for MacOpenEventHandler {}
+
+    impl MacOpenEventHandler {
+        #[unsafe(method(installOpenDocumentHandler:))]
+        fn install_open_document_handler(&self, _notification: &NSNotification) {
+            set_macos_open_event_handler(self);
+        }
+
+        #[unsafe(method(handleOpenDocuments:withReplyEvent:))]
+        fn handle_open_documents(
+            &self,
+            event: &NSAppleEventDescriptor,
+            _reply: &NSAppleEventDescriptor,
+        ) {
+            let Some(documents) = event.paramDescriptorForKeyword(keyDirectObject) else {
+                return;
+            };
+            let paths = (1..=documents.numberOfItems())
+                .filter_map(|index| documents.descriptorAtIndex(index))
+                .filter_map(|descriptor| descriptor.fileURLValue())
+                .filter(|url| url.isFileURL())
+                .filter_map(|url| url.path().map(|path| path.to_string()))
+                .collect::<Vec<_>>();
+            dispatch_or_queue_macos_paths(paths);
+        }
+    }
+);
+
+#[cfg(target_os = "macos")]
+impl MacOpenEventHandler {
+    fn new(marker: MainThreadMarker) -> objc2::rc::Retained<Self> {
+        let instance = Self::alloc(marker);
+        unsafe { msg_send![instance, init] }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn register_macos_open_handler() -> Result<(), String> {
+    let marker = MainThreadMarker::new()
+        .ok_or_else(|| "macOS open handler must be registered on the main thread".to_string())?;
+    let handler = MacOpenEventHandler::new(marker);
+    set_macos_open_event_handler(&handler);
+    let center = NSNotificationCenter::defaultCenter();
+    unsafe {
+        center.addObserver_selector_name_object(
+            handler.as_ref(),
+            sel!(installOpenDocumentHandler:),
+            Some(NSAppleEventManagerWillProcessFirstEventNotification),
+            None,
+        );
+    }
+    // Foundation does not retain selector-based observers or Apple Event handlers.
+    std::mem::forget(handler);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn activate_macos_open_handler(app: &tauri::AppHandle) -> Result<(), String> {
+    MACOS_APP_HANDLE
+        .set(app.clone())
+        .map_err(|_| "macOS open handler is already installed".to_string())?;
+    let pending = std::mem::take(
+        &mut *MACOS_PENDING_PATHS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    );
+    dispatch_open_paths(app, pending);
+    Ok(())
 }
 
 #[tauri::command]
@@ -175,17 +326,25 @@ fn take_pending_open_paths(
     state.mark_ready_and_take(window.label())
 }
 
+#[tauri::command]
+fn take_pending_heading_fragment(
+    window: WebviewWindow,
+    state: tauri::State<'_, WindowRegistry>,
+) -> Option<String> {
+    state.take_fragment(window.label())
+}
+
 fn create_window(
     app: &tauri::AppHandle,
     registry: &WindowRegistry,
     file_path: Option<String>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     if let Some(path) = file_path.as_deref()
         && let Some(label) = registry.window_for_path(path)
         && let Some(window) = app.get_webview_window(&label)
     {
         focus_window(&window);
-        return Ok(());
+        return Ok(label);
     }
 
     let sequence = registry.next_label.fetch_add(1, Ordering::SeqCst);
@@ -223,7 +382,7 @@ fn create_window(
         let _ = window.center();
     }
     focus_window(&window);
-    Ok(())
+    Ok(label)
 }
 
 #[tauri::command]
@@ -237,7 +396,34 @@ async fn open_document_windows(
         return Err("Only .md and .markdown files can be opened".to_string());
     }
     for path in markdown {
-        create_window(&app, &state, Some(path))?;
+        let _ = create_window(&app, &state, Some(path))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_document_window_at(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WindowRegistry>,
+    file_path: String,
+    fragment: String,
+) -> Result<(), String> {
+    if markdown_paths([file_path.clone()]).is_empty() {
+        return Err("Only .md and .markdown files can be opened".to_string());
+    }
+    let label = create_window(&app, &state, Some(file_path))?;
+    let fragment = fragment.trim().to_string();
+    if fragment.is_empty() {
+        return Ok(());
+    }
+    if state.is_ready(&label) {
+        if let Some(window) = app.get_webview_window(&label) {
+            window
+                .emit_to(&label, "navigate-document-heading", fragment)
+                .map_err(|error| error.to_string())?;
+        }
+    } else {
+        state.queue_fragment(&label, fragment);
     }
     Ok(())
 }
@@ -247,7 +433,7 @@ async fn create_document_window(
     app: tauri::AppHandle,
     state: tauri::State<'_, WindowRegistry>,
 ) -> Result<(), String> {
-    create_window(&app, &state, None)
+    create_window(&app, &state, None).map(|_| ())
 }
 
 #[tauri::command]
@@ -257,6 +443,26 @@ fn set_window_document(
     file_path: Option<String>,
 ) {
     state.set_document(window.label(), file_path);
+}
+
+#[tauri::command]
+fn focus_existing_document_window(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    state: tauri::State<'_, WindowRegistry>,
+    file_path: String,
+) -> bool {
+    let Some(label) = state.window_for_path(&file_path) else {
+        return false;
+    };
+    if label == window.label() {
+        return false;
+    }
+    if let Some(existing) = app.get_webview_window(&label) {
+        focus_window(&existing);
+        return true;
+    }
+    false
 }
 
 #[tauri::command]
@@ -273,15 +479,16 @@ fn watch_document(
         .ok_or_else(|| "The Markdown path has no parent directory".to_string())?
         .to_path_buf();
     let emitted_path = target.to_string_lossy().into_owned();
+    let watched_target = target.clone();
     let event_window = window.clone();
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         let Ok(event) = result else { return };
         if matches!(event.kind, EventKind::Access(_))
-            || !event.paths.iter().any(|path| path == &target)
+            || !event.paths.iter().any(|path| path == &watched_target)
         {
             return;
         }
-        let _ = event_window.emit("document-file-event", &emitted_path);
+        let _ = event_window.emit_to(event_window.label(), "document-file-event", &emitted_path);
     })
     .map_err(|error| format!("Cannot create the Markdown file watcher: {error}"))?;
     watcher
@@ -291,17 +498,34 @@ fn watch_document(
         .0
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(window.label().to_string(), watcher);
+        .insert(
+            window.label().to_string(),
+            WatchedDocument {
+                target,
+                _watcher: watcher,
+            },
+        );
     Ok(())
 }
 
 #[tauri::command]
-fn stop_document_watch(window: WebviewWindow, state: tauri::State<'_, DocumentWatchState>) {
-    state
+fn stop_document_watch(
+    window: WebviewWindow,
+    state: tauri::State<'_, DocumentWatchState>,
+    file_path: Option<String>,
+) {
+    let mut watches = state
         .0
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(window.label());
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let should_remove = file_path.is_none_or(|value| {
+        watches
+            .get(window.label())
+            .is_some_and(|watch| watch.target.as_path() == std::path::Path::new(&value))
+    });
+    if should_remove {
+        watches.remove(window.label());
+    }
 }
 
 fn begin_quit(app: &tauri::AppHandle) {
@@ -347,7 +571,7 @@ fn begin_quit(app: &tauri::AppHandle) {
         && let Some(window) = app.get_webview_window(&label)
     {
         focus_window(&window);
-        let _ = window.emit("quit-requested", id);
+        let _ = window.emit_to(window.label(), "quit-requested", id);
     }
 }
 
@@ -413,7 +637,7 @@ fn continue_quit(app: &tauri::AppHandle, request_id: u64) {
         };
         if let Some(next_window) = app.get_webview_window(&label) {
             focus_window(&next_window);
-            let _ = next_window.emit("quit-requested", request_id);
+            let _ = next_window.emit_to(next_window.label(), "quit-requested", request_id);
             return;
         }
         let mut request = state
@@ -528,13 +752,49 @@ fn application_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::paste(app, Some("粘贴"))?,
             &PredefinedMenuItem::select_all(app, Some("全选"))?,
             &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(
+                app,
+                "edit.copy_code",
+                "复制代码块",
+                true,
+                Some("CmdOrCtrl+Shift+C"),
+            )?,
             &MenuItem::with_id(app, "edit.find", "查找…", true, Some("CmdOrCtrl+F"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "format.paragraph", "正文", true, Some("CmdOrCtrl+0"))?,
+            &MenuItem::with_id(app, "format.heading1", "标题 1", true, Some("CmdOrCtrl+1"))?,
+            &MenuItem::with_id(app, "format.heading2", "标题 2", true, Some("CmdOrCtrl+2"))?,
+            &MenuItem::with_id(app, "format.heading3", "标题 3", true, Some("CmdOrCtrl+3"))?,
+            &MenuItem::with_id(app, "format.heading4", "标题 4", true, Some("CmdOrCtrl+4"))?,
+            &MenuItem::with_id(app, "format.heading5", "标题 5", true, Some("CmdOrCtrl+5"))?,
+            &MenuItem::with_id(app, "format.heading6", "标题 6", true, Some("CmdOrCtrl+6"))?,
+            &MenuItem::with_id(app, "format.blockquote", "引用", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "format.bullet_list",
+                "无序列表",
+                true,
+                Some("CmdOrCtrl+Shift+8"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "format.ordered_list",
+                "有序列表",
+                true,
+                Some("CmdOrCtrl+Shift+7"),
+            )?,
+            &MenuItem::with_id(app, "format.task_list", "任务列表", true, None::<&str>)?,
+            &MenuItem::with_id(app, "format.code_block", "代码块", true, None::<&str>)?,
+            &MenuItem::with_id(app, "format.horizontal_rule", "分隔线", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "format.bold", "粗体", true, Some("CmdOrCtrl+B"))?,
             &MenuItem::with_id(app, "format.italic", "斜体", true, Some("CmdOrCtrl+I"))?,
+            &MenuItem::with_id(app, "format.strike", "删除线", true, None::<&str>)?,
+            &MenuItem::with_id(app, "format.code", "行内代码", true, None::<&str>)?,
             &MenuItem::with_id(app, "format.link", "链接…", true, Some("CmdOrCtrl+K"))?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "format.table", "插入表格…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "format.image", "插入图片…", true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 "format.mermaid",
@@ -549,10 +809,15 @@ fn application_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         "显示",
         true,
-        &[&PredefinedMenuItem::fullscreen(app, Some("进入全屏幕"))?],
+        &[
+            &MenuItem::with_id(app, "format.source", "源码模式", true, Some("CmdOrCtrl+/"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::fullscreen(app, Some("进入全屏幕"))?,
+        ],
     )?;
-    let window_menu = Submenu::with_items(
+    let window_menu = Submenu::with_id_and_items(
         app,
+        WINDOW_SUBMENU_ID,
         "窗口",
         true,
         &[
@@ -569,6 +834,9 @@ fn application_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    register_macos_open_handler().expect("failed to register macOS file open handler");
+
     let initial_paths = markdown_paths(std::env::args().skip(1));
     let app = tauri::Builder::default()
         .manage(WindowRegistry::new(initial_paths))
@@ -586,7 +854,7 @@ pub fn run() {
                     let registry = window.state::<WindowRegistry>();
                     if registry.is_ready(&label) {
                         api.prevent_close();
-                        let _ = window.emit("close-requested", ());
+                        let _ = window.emit_to(window.label(), "close-requested", ());
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
@@ -605,13 +873,12 @@ pub fn run() {
             let id = event.id().as_ref();
             if id == "app.quit" {
                 begin_quit(app);
-            } else if id.starts_with("file.")
+            } else if (id.starts_with("file.")
                 || id.starts_with("edit.")
-                || id.starts_with("format.")
+                || id.starts_with("format."))
+                && let Some(window) = focused_window(app)
             {
-                if let Some(window) = focused_window(app) {
-                    let _ = window.emit("menu-command", id);
-                }
+                let _ = window.emit_to(window.label(), "menu-command", id);
             }
         })
         .plugin(tauri_plugin_dialog::init())
@@ -624,6 +891,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             document::read_document,
             document::read_local_image,
+            document::import_document_image,
+            document::store_document_image,
             document::resolve_markdown_link,
             document::inspect_document,
             document::save_document,
@@ -634,10 +903,14 @@ pub fn run() {
             storage::list_drafts,
             storage::list_recent_files,
             storage::remove_recent_file,
+            storage::clear_recent_files,
             take_pending_open_paths,
+            take_pending_heading_fragment,
             open_document_windows,
+            open_document_window_at,
             create_document_window,
             set_window_document,
+            focus_existing_document_window,
             watch_document,
             stop_document_watch,
             close_current_window,
@@ -646,8 +919,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build Nolia Lite");
 
-    app.run(|app, event| match event {
-        tauri::RunEvent::ExitRequested { api, .. } => {
+    #[cfg(target_os = "macos")]
+    activate_macos_open_handler(app.handle()).expect("failed to activate macOS file open handler");
+
+    app.run(|app, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
             let exit = app.state::<ExitState>();
             if exit.forced.load(Ordering::SeqCst) || app.webview_windows().is_empty() {
                 return;
@@ -655,16 +931,6 @@ pub fn run() {
             api.prevent_exit();
             begin_quit(app);
         }
-        #[cfg(target_os = "macos")]
-        tauri::RunEvent::Opened { urls } => {
-            let paths = urls
-                .into_iter()
-                .filter_map(|url| url.to_file_path().ok())
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
-            dispatch_open_paths(app, markdown_paths(paths));
-        }
-        _ => {}
     });
 }
 
@@ -693,6 +959,17 @@ mod tests {
         );
         assert!(pending.mark_ready_and_take("main").is_empty());
         assert!(pending.is_ready("main"));
+    }
+
+    #[test]
+    fn pending_heading_fragment_is_consumed_once() {
+        let registry = WindowRegistry::new(Vec::new());
+        registry.queue_fragment("document-1", "details".to_string());
+        assert_eq!(
+            registry.take_fragment("document-1").as_deref(),
+            Some("details")
+        );
+        assert!(registry.take_fragment("document-1").is_none());
     }
 
     #[test]

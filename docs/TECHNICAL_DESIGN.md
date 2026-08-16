@@ -29,7 +29,7 @@ Nolia Lite 使用 Tauri 2 构建 macOS 桌面应用：
 - unified / remark 只负责 Markdown 解析和受控序列化，不将 HTML 作为文档事实来源。
 - 编辑器采用“原始源码块 + 可编辑节点”的保真模型：未修改块直接复用打开时的原始 Markdown，只有用户实际修改过的块才重新序列化。
 - Frontmatter 和无法可靠往返的语法使用局部源码节点；HTML 只经过严格清洗后渲染，任何不安全内容仍走保护路径。
-- 编辑器运行时与空状态应用壳分包；KaTeX 和常用语言高亮随编辑器加载，Mermaid 仅在文档包含图表时动态加载。
+- 编辑器运行时与轻量历史应用壳分包；KaTeX 和常用语言高亮随编辑器加载，Mermaid 仅在文档包含图表时动态加载。
 - 应用不使用数据库、账号、网络请求、索引、工作区、插件运行时或窗口内多文档会话。
 
 该方案复用 Nolia 已验证的设计思想，但不直接复用其工作站架构。尤其不能直接复制 Nolia 的 Electron 壳、工作区服务、SQL 数据层、全文索引、AI、插件、图谱、多标签页或多编辑模式。
@@ -53,7 +53,7 @@ Nolia Lite 使用 Tauri 2 构建 macOS 桌面应用：
 ### 3.2 明确不进入 MVP
 
 - 工作区、文件夹树和标签页。
-- 源码模式、预览模式、分屏模式。
+- 分屏预览模式；全文源码模式是同一 Markdown 状态的另一编辑表面，不属于第二份文档模型。
 - 跨文件搜索、替换、目录扫描、索引和数据库。
 - Markdown 插件、用户脚本、命令面板。
 - AI、账号、同步、协作和遥测。
@@ -87,7 +87,7 @@ Nolia Lite 使用 Tauri 2 构建 macOS 桌面应用：
 | ADR-11 | 常用语言使用本地语法高亮 | 与 Nolia 的代码块体验一致；只注册 Lowlight `common` 集合，未知语言回退纯文本 |
 | ADR-12 | 外部富文本粘贴按纯文本处理 | 避免不可靠 HTML 转 Markdown 和脚本风险 |
 | ADR-13 | 复杂 Markdown 行为与 Nolia 对齐 | Lite 精简应用壳，不制造第二套编辑手势 |
-| ADR-14 | 应用壳与编辑器分包，Mermaid 动态加载 | 保持空状态与普通文档的启动时间和内存边界 |
+| ADR-14 | 应用壳与编辑器分包，Mermaid 动态加载 | 保持历史状态与普通文档的启动时间和内存边界 |
 | ADR-15 | Mermaid 使用 strict security mode | 图表文本不能执行 HTML、脚本或外部嵌入 |
 | ADR-16 | HTML 导出使用当前渲染快照，PDF 使用系统 WebView 原生文件输出 | 保留表格、公式、Mermaid 和本地图片展示，不显示打印面板，同时不引入 Chromium/Pandoc/Office 运行时 |
 
@@ -183,7 +183,7 @@ src/
     protected/
   components/
     TitleBar.tsx
-    EmptyState.tsx
+    HistorySidebar.tsx
     FindBar.tsx
     SelectionToolbar.tsx
     StatusBanner.tsx
@@ -438,17 +438,18 @@ type SourceBlock = {
 #### 链接
 
 - `href` 的 Markdown 原字符串属于文档内容；相对链接不得被解析成绝对路径后写回，也不得被自动 URL 规范化。
-- 已有链接普通点击后，定位连续 `link` mark 的 ProseMirror 范围，隐藏该范围的渲染 DOM，并在同一位置挂载单行等宽输入框，内容为完整 `[label](href)`。
-- 链接 label 的序列化需先移除 `link` mark，但保留粗体、斜体、删除线和行内代码等嵌套 mark；提交时再解析 label 为行内 Fragment，并统一加回新的 `link` mark。
-- Enter 或失焦提交，Escape 只清理局部源码状态；解析失败时不得修改文档模型。
-- `Command/Ctrl+Click` 可通过系统默认浏览器打开，属于用户明确操作；应用自身不请求目标 URL。
-- 新建链接或 `Command/Ctrl+K` 命令使用“文本 + 链接”两字段表单，与已有链接的普通点击行为分离。
+- 普通点击直接向应用发送 `{ href, newWindow: false }`；锚点在当前编辑器内跳转，相对 Markdown 路径经 Rust 校验后替换当前文档。
+- `Command/Ctrl+Click` 发送 `{ href, newWindow: true }`；相对 Markdown 路径经 Rust 校验后创建独立原生窗口。
+- 外部协议由 opener 交给系统默认应用，WebView 不请求目标 URL。
+- 新建或编辑链接统一使用 `Command/Ctrl+K` 的“文本 + 链接”两字段表单。
 
 #### 图片
 
 - Markdown 中始终保留相对路径字符串。
 - 前端请求 Rust 读取当前文档相对路径对应的本地图片，返回内存字节并生成短期 blob URL。
 - 不把绝对路径写回 Markdown。
+- 选择或拖入图片时，Rust 原子复制到文档同级 `assets/`，同名不同内容自动编号；相同内容复用既有文件。
+- 粘贴图片时，前端把剪贴板字节交给 Rust 写入 `assets/`，再插入相对 Markdown 路径。
 - `http:` / `https:` 图片不加载，只显示带 alt/path 的占位内容。
 - 图片不存在、越权或格式不支持时显示稳定占位，不影响保存。
 - 原始 HTML、SVG 脚本和嵌入内容不执行。
@@ -540,7 +541,7 @@ type RecoveryDraft = {
 - 成功保存对应 revision 后删除已覆盖的草稿。
 - 应用异常退出后，打开同一文件时比较草稿 base 与当前磁盘哈希。
 - 哈希一致时可恢复或使用磁盘版本；不一致时按冲突处理，可另存草稿。
-- 未命名草稿在下次启动的空状态中提供恢复入口。
+- 未命名草稿在下次启动的历史面板中提供恢复入口。
 - 用户明确“丢弃”后删除草稿；普通失败和崩溃不得删除。
 
 ### 10.6 最近文件
@@ -550,6 +551,7 @@ type RecoveryDraft = {
 - 只在用户成功打开或保存文件后更新。
 - 不扫描父目录，不建立索引，不读取文档内容生成摘要。
 - 路径不存在时保留为不可用项，用户点击后提示并允许从列表移除。
+- 历史面板支持移除单条和清空全部最近记录；两种操作都不触碰磁盘文档或恢复草稿。
 
 ### 10.7 文件监听
 
@@ -602,7 +604,9 @@ type RecoveryDraft = {
 ### 12.2 文件关联
 
 - 注册 `.md` 和 `.markdown` 文件关联。
-- 处理冷启动打开事件和应用已运行时的 open-file 事件。
+- macOS 在 Tauri runtime 创建前注册 `NSAppleEventManager` 的 `kAEOpenDocuments` handler，避免首次 Finder/LaunchServices Apple Event 早于默认窗口而丢失。
+- AppHandle 尚未就绪时路径进入静态队列；AppHandle 就绪但主窗口尚未创建时进入 `main` 窗口队列；窗口创建后由前端 `take_pending_open_paths` 握手消费。
+- 应用已运行时的 open-file 事件、单实例转发和前端打开路径均按窗口 label 路由；窗口事件使用定向 emit，不能广播到其他文档窗口。
 - 路径在 Rust 侧规范化与校验，前端不能直接读任意路径。
 
 ### 12.3 拖放
@@ -610,14 +614,15 @@ type RecoveryDraft = {
 - 使用 Tauri 原生文件 drop 事件。
 - 接受一个或多个本地 Markdown 文件，每份文件进入独立窗口。
 - 编辑器内部拖动选区与窗口文件拖放必须区分。
-- 拖入图片不自动复制或改写文档路径，MVP 不提供附件导入。
+- 拖入图片复制到当前文档同级 `assets/` 并插入相对 Markdown 路径；未保存文档拒绝导入并提示先保存。
 
 ### 12.4 原生菜单
 
 保留 macOS 标准应用菜单和以下命令：
 
 - File：New、Open、Save、Save As、Export HTML、Export PDF、Close。
-- Edit：Undo、Redo、Cut、Copy、Paste、Find、Bold、Italic、Insert Link。
+- Edit：Undo、Redo、Cut、Copy、Paste、Find、标题/段落、列表、引用、代码、行内格式、链接、图片、表格、Mermaid 和公式。
+- View：Source Mode、Full Screen。
 - Window：Minimize、Zoom。
 
 导出仅作为 File 菜单中的紧凑子菜单出现；不增加工作区、视图模式、插件、导出中心或命令面板菜单。
@@ -730,7 +735,7 @@ base-uri 'none';
 
 ### 15.2 手段
 
-- 空状态不加载 Tiptap 和 remark 主包；第一次创建/打开文档时动态加载。
+- 历史状态不加载 Tiptap 和编辑器主包；第一次创建/打开文档时动态加载。
 - 全量 Markdown 解析放入 Web Worker。
 - 输入 transaction 只标记受影响的顶层块，不重建 React tree。
 - 自动保存只序列化 dirty blocks。
@@ -813,7 +818,7 @@ base-uri 'none';
 
 Web 前端使用 Playwright + mock Tauri bridge：
 
-- 空状态、新建、打开、保存状态。
+- 历史侧栏、新建、打开、删除/清空历史、保存状态。
 - Markdown 输入规则和格式快捷键。
 - 查找、浮动工具条、链接和表格完整编辑动作。
 - Mermaid 渲染、局部源码、修饰键查看、缩放、导出、错误和复制语义。
@@ -930,4 +935,4 @@ Tauri 原生行为使用 Rust 集成测试和 macOS release smoke checklist；�
 5. 所有失败路径都保留内存内容或恢复草稿。
 6. 运行期间默认零网络请求。
 7. release 构建达到启动、包体、内存和大文档目标。
-8. 产品中不存在侧栏、标签页、源码/预览切换、AI、插件或工作区入口；多文档只通过独立原生窗口呈现。
+8. 文档模式不存在侧栏、标签页、源码/预览切换、AI、插件或工作区入口；无文档时只显示单层历史侧栏，多文档只通过独立原生窗口呈现。

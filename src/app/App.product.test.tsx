@@ -7,20 +7,36 @@ import type { ReadDocumentResult, SaveDocumentResult } from "../bridge/contracts
 import { App } from "./App";
 
 const bridge = vi.hoisted(() => ({
-  closeHandler: undefined as undefined | ((preventDefault: () => void) => void),
+  closeHandler: undefined as undefined | (() => void),
   menuHandler: undefined as undefined | ((command: string) => void),
   openHandler: undefined as undefined | ((paths: string[]) => void),
   dropHandler: undefined as undefined | ((paths: string[]) => void),
   documentHandler: undefined as undefined | ((filePath: string) => void),
+  headingHandler: undefined as undefined | ((fragment: string) => void),
   quitHandler: undefined as undefined | ((requestId: number) => void),
   dropRegistrationError: undefined as Error | undefined,
   editorActions: {
+    toggleSource: vi.fn(),
     toggleBold: vi.fn(),
     toggleItalic: vi.fn(),
+    toggleStrike: vi.fn(),
+    toggleCode: vi.fn(),
+    setParagraph: vi.fn(),
+    toggleHeading: vi.fn(),
+    toggleBlockquote: vi.fn(),
+    toggleBulletList: vi.fn(),
+    toggleOrderedList: vi.fn(),
+    toggleTaskList: vi.fn(),
+    toggleCodeBlock: vi.fn(),
+    insertHorizontalRule: vi.fn(),
+    copyCode: vi.fn(async () => true),
+    insertImage: vi.fn(async () => 1),
+    insertImageFiles: vi.fn(async () => 1),
     editLink: vi.fn(),
     insertTable: vi.fn(),
     insertMermaid: vi.fn(),
     insertMath: vi.fn(),
+    prepareExport: vi.fn(async () => undefined),
     getExportHtml: vi.fn(),
     jumpToHeading: vi.fn()
   },
@@ -30,6 +46,7 @@ const bridge = vi.hoisted(() => ({
   pickMarkdownSavePath: vi.fn(),
   pickExportSavePath: vi.fn(),
   exportPdf: vi.fn(),
+  focusExistingDocumentWindow: vi.fn(),
   readDocument: vi.fn(),
   saveDocument: vi.fn(),
   writeExportDocument: vi.fn(),
@@ -37,8 +54,10 @@ const bridge = vi.hoisted(() => ({
   writeDraft: vi.fn(),
   deleteDraft: vi.fn(),
   removeRecentFile: vi.fn(),
+  clearRecentFiles: vi.fn(),
   resolveMarkdownLink: vi.fn(),
   openExternalUrl: vi.fn(),
+  openDocumentWindowAt: vi.fn(),
   openDocumentWindows: vi.fn(),
   createDocumentWindow: vi.fn(),
   setWindowDocument: vi.fn(),
@@ -47,7 +66,8 @@ const bridge = vi.hoisted(() => ({
   setWindowTitle: vi.fn(),
   watchDocument: vi.fn(),
   stopDocumentWatch: vi.fn(),
-  takePendingOpenPaths: vi.fn()
+  takePendingOpenPaths: vi.fn(),
+  takePendingHeadingFragment: vi.fn()
 }));
 
 vi.mock("../bridge/tauriClient", () => ({
@@ -58,6 +78,7 @@ vi.mock("../bridge/tauriClient", () => ({
   pickMarkdownSavePath: bridge.pickMarkdownSavePath,
   pickExportSavePath: bridge.pickExportSavePath,
   exportPdf: bridge.exportPdf,
+  focusExistingDocumentWindow: bridge.focusExistingDocumentWindow,
   readDocument: bridge.readDocument,
   saveDocument: bridge.saveDocument,
   writeExportDocument: bridge.writeExportDocument,
@@ -65,8 +86,10 @@ vi.mock("../bridge/tauriClient", () => ({
   writeDraft: bridge.writeDraft,
   deleteDraft: bridge.deleteDraft,
   removeRecentFile: bridge.removeRecentFile,
+  clearRecentFiles: bridge.clearRecentFiles,
   resolveMarkdownLink: bridge.resolveMarkdownLink,
   openExternalUrl: bridge.openExternalUrl,
+  openDocumentWindowAt: bridge.openDocumentWindowAt,
   openDocumentWindows: bridge.openDocumentWindows,
   createDocumentWindow: bridge.createDocumentWindow,
   setWindowDocument: bridge.setWindowDocument,
@@ -76,6 +99,7 @@ vi.mock("../bridge/tauriClient", () => ({
   watchDocument: bridge.watchDocument,
   stopDocumentWatch: bridge.stopDocumentWatch,
   takePendingOpenPaths: bridge.takePendingOpenPaths,
+  takePendingHeadingFragment: bridge.takePendingHeadingFragment,
   onDocumentFileEvent: vi.fn(async (handler: (filePath: string) => void) => {
     bridge.documentHandler = handler;
     return () => undefined;
@@ -84,12 +108,16 @@ vi.mock("../bridge/tauriClient", () => ({
     bridge.openHandler = handler;
     return () => undefined;
   }),
+  onNavigateDocumentHeading: vi.fn(async (handler: (fragment: string) => void) => {
+    bridge.headingHandler = handler;
+    return () => undefined;
+  }),
   onWindowFileDrop: vi.fn(async (handler: (paths: string[]) => void) => {
     if (bridge.dropRegistrationError) throw bridge.dropRegistrationError;
     bridge.dropHandler = handler;
     return () => undefined;
   }),
-  onCloseRequested: vi.fn(async (handler: (preventDefault: () => void) => void) => {
+  onCloseRequested: vi.fn(async (handler: () => void) => {
     bridge.closeHandler = handler;
     return () => undefined;
   }),
@@ -106,34 +134,63 @@ vi.mock("../bridge/tauriClient", () => ({
 vi.mock("../editor/MarkdownEditor", async () => {
   const React = await import("react");
   const MarkdownEditor = React.forwardRef(function MockEditor(
-    props: { value: string; editable: boolean; onChange: (value: string) => void; onOpenLink?: (href: string) => void },
+    props: {
+      value: string;
+      filePath?: string;
+      editable: boolean;
+      onChange: (value: string) => void;
+      onOpenLink?: (href: string, options: { newWindow: boolean }) => void;
+    },
     ref: React.ForwardedRef<Record<string, () => void>>
   ) {
+    const [extensionConfig] = React.useState({ filePath: props.filePath ?? "", editable: props.editable });
     React.useImperativeHandle(ref, () => ({
       focus: () => undefined,
+      toggleSource: bridge.editorActions.toggleSource,
       toggleBold: bridge.editorActions.toggleBold,
       toggleItalic: bridge.editorActions.toggleItalic,
+      toggleStrike: bridge.editorActions.toggleStrike,
+      toggleCode: bridge.editorActions.toggleCode,
+      setParagraph: bridge.editorActions.setParagraph,
+      toggleHeading: bridge.editorActions.toggleHeading,
+      toggleBlockquote: bridge.editorActions.toggleBlockquote,
+      toggleBulletList: bridge.editorActions.toggleBulletList,
+      toggleOrderedList: bridge.editorActions.toggleOrderedList,
+      toggleTaskList: bridge.editorActions.toggleTaskList,
+      toggleCodeBlock: bridge.editorActions.toggleCodeBlock,
+      insertHorizontalRule: bridge.editorActions.insertHorizontalRule,
+      copyCode: bridge.editorActions.copyCode,
+      insertImage: bridge.editorActions.insertImage,
+      insertImageFiles: bridge.editorActions.insertImageFiles,
       editLink: bridge.editorActions.editLink,
       undo: () => undefined,
       redo: () => undefined,
       insertTable: bridge.editorActions.insertTable,
       insertMermaid: bridge.editorActions.insertMermaid,
       insertMath: bridge.editorActions.insertMath,
+      prepareExport: bridge.editorActions.prepareExport,
       getExportHtml: bridge.editorActions.getExportHtml,
       find: () => ({ current: 0, total: 0 }),
       jumpToHeading: bridge.editorActions.jumpToHeading
     }));
     return React.createElement(
       "div",
-      { role: "textbox", "aria-label": "Markdown 文档", "data-editable": String(props.editable) },
+      {
+        role: "textbox",
+        "aria-label": "Markdown 文档",
+        "data-editable": String(props.editable),
+        "data-extension-file-path": extensionConfig.filePath,
+        "data-extension-editable": String(extensionConfig.editable)
+      },
       React.createElement("span", null, props.value),
       props.editable
         ? React.createElement(
             React.Fragment,
             null,
             React.createElement("button", { type: "button", onClick: () => props.onChange("changed markdown") }, "模拟编辑"),
-            React.createElement("button", { type: "button", onClick: () => props.onOpenLink?.("./next.md#section") }, "模拟打开链接"),
-            React.createElement("button", { type: "button", onClick: () => props.onOpenLink?.("https://example.com") }, "模拟打开外链")
+            React.createElement("button", { type: "button", onClick: () => props.onOpenLink?.("./next.md#section", { newWindow: false }) }, "模拟打开链接"),
+            React.createElement("button", { type: "button", onClick: () => props.onOpenLink?.("./next.md#section", { newWindow: true }) }, "模拟新窗口打开链接"),
+            React.createElement("button", { type: "button", onClick: () => props.onOpenLink?.("https://example.com", { newWindow: false }) }, "模拟打开外链")
           )
         : null
     );
@@ -166,6 +223,7 @@ beforeEach(() => {
   bridge.openHandler = undefined;
   bridge.dropHandler = undefined;
   bridge.documentHandler = undefined;
+  bridge.headingHandler = undefined;
   bridge.quitHandler = undefined;
   bridge.dropRegistrationError = undefined;
   bridge.listRecentFiles.mockResolvedValue([]);
@@ -177,13 +235,16 @@ beforeEach(() => {
   bridge.saveDocument.mockResolvedValue(savedResult());
   bridge.writeExportDocument.mockResolvedValue("/tmp/opened.html");
   bridge.exportPdf.mockResolvedValue("/tmp/opened.pdf");
+  bridge.focusExistingDocumentWindow.mockResolvedValue(false);
   bridge.editorActions.getExportHtml.mockReturnValue("<h1>Exported</h1>");
   bridge.inspectDocument.mockResolvedValue({ status: "current", fingerprint: openedFile().fingerprint });
   bridge.writeDraft.mockResolvedValue(undefined);
   bridge.deleteDraft.mockResolvedValue(undefined);
   bridge.removeRecentFile.mockResolvedValue([]);
+  bridge.clearRecentFiles.mockResolvedValue([]);
   bridge.resolveMarkdownLink.mockResolvedValue("/tmp/next.md");
   bridge.openExternalUrl.mockResolvedValue(undefined);
+  bridge.openDocumentWindowAt.mockResolvedValue(undefined);
   bridge.openDocumentWindows.mockResolvedValue(undefined);
   bridge.createDocumentWindow.mockResolvedValue(undefined);
   bridge.setWindowDocument.mockResolvedValue(undefined);
@@ -193,13 +254,14 @@ beforeEach(() => {
   bridge.watchDocument.mockResolvedValue(undefined);
   bridge.stopDocumentWatch.mockResolvedValue(undefined);
   bridge.takePendingOpenPaths.mockResolvedValue([]);
+  bridge.takePendingHeadingFragment.mockResolvedValue(undefined);
   bridge.editorActions.jumpToHeading.mockReturnValue(true);
 });
 
 afterEach(cleanup);
 
 describe("product workflows", () => {
-  it("loads recovery and recent-file entry points without adding workspace UI", async () => {
+  it("shows recovery and recent files in the history sidebar and clears history", async () => {
     bridge.listRecentFiles.mockResolvedValue([{
       filePath: "/tmp/recent.md",
       displayName: "recent.md",
@@ -218,9 +280,12 @@ describe("product workflows", () => {
       updatedAt: Date.now()
     }]);
     render(<App />);
+    expect(await screen.findByRole("complementary", { name: "文件历史" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: /recovery\.md/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /recent\.md/ })).toBeTruthy();
-    expect(screen.queryByText(/工作区|文件树|标签页/)).toBeNull();
+    expect(screen.getByRole("button", { name: /^recent\.md/ })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Nolia Lite" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "清空历史" }));
+    await waitFor(() => expect(bridge.clearRecentFiles).toHaveBeenCalledOnce());
   });
 
   it("reuses an empty window for startup and opens later Finder paths in new windows", async () => {
@@ -244,6 +309,17 @@ describe("product workflows", () => {
     await waitFor(() => expect(bridge.readDocument).toHaveBeenCalledWith("/tmp/isolated-listener.md"));
   });
 
+  it("focuses an existing document window instead of opening a duplicate", async () => {
+    bridge.pickMarkdownFiles.mockResolvedValue(["/tmp/already-open.md"]);
+    bridge.focusExistingDocumentWindow.mockResolvedValue(true);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "打开文件" }));
+
+    await waitFor(() => expect(bridge.focusExistingDocumentWindow).toHaveBeenCalledWith("/tmp/already-open.md"));
+    expect(bridge.readDocument).not.toHaveBeenCalled();
+  });
+
   it("creates, edits, saves, and transitions an untitled document to a file session", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "新建文档" }));
@@ -259,6 +335,25 @@ describe("product workflows", () => {
       mode: "saveAs"
     });
     await waitFor(() => expect(screen.getByRole("status").textContent).toContain("已保存"));
+    expect(screen.getByRole("textbox", { name: "Markdown 文档" }).getAttribute("data-extension-file-path"))
+      .toBe("/tmp/saved.md");
+  });
+
+  it("does not start a second save while the save path picker is open", async () => {
+    let resolvePath: ((path: string) => void) | undefined;
+    bridge.pickMarkdownSavePath.mockImplementation(() => new Promise((resolve) => {
+      resolvePath = resolve;
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "新建文档" }));
+    fireEvent.click(await screen.findByRole("button", { name: "模拟编辑" }));
+
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+    expect(bridge.pickMarkdownSavePath).toHaveBeenCalledOnce();
+    await act(async () => resolvePath!("/tmp/saved.md"));
+
+    await waitFor(() => expect(bridge.saveDocument).toHaveBeenCalledOnce());
   });
 
   it("opens unsupported encoding as truly readonly and blocks normal save", async () => {
@@ -301,9 +396,10 @@ describe("product workflows", () => {
     fireEvent.click(await screen.findByRole("button", { name: "新建文档" }));
     fireEvent.click(await screen.findByRole("button", { name: "模拟编辑" }));
     await waitFor(() => expect(bridge.closeHandler).toBeTypeOf("function"));
-    const preventDefault = vi.fn();
-    act(() => bridge.closeHandler!(preventDefault));
-    expect(preventDefault).toHaveBeenCalledOnce();
+    act(() => {
+      bridge.closeHandler!();
+      bridge.closeHandler!();
+    });
     fireEvent.click(await screen.findByRole("button", { name: "保留草稿并退出" }));
     await waitFor(() => expect(bridge.writeDraft).toHaveBeenCalled());
     expect(bridge.writeDraft.mock.calls.at(-1)?.[0].markdown).toBe("changed markdown");
@@ -377,6 +473,27 @@ describe("product workflows", () => {
     await waitFor(() => expect(bridge.openExternalUrl).toHaveBeenCalledWith("https://example.com"));
   });
 
+  it("opens modified relative Markdown links in a new native window", async () => {
+    bridge.pickMarkdownFiles.mockResolvedValue(["/tmp/opened.md"]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "打开文件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "模拟新窗口打开链接" }));
+
+    await waitFor(() => expect(bridge.resolveMarkdownLink).toHaveBeenCalledWith("/tmp/opened.md", "./next.md"));
+    expect(bridge.openDocumentWindowAt).toHaveBeenCalledWith("/tmp/next.md", "section");
+    expect(bridge.readDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("imports dropped images into the current saved document", async () => {
+    bridge.pickMarkdownFiles.mockResolvedValue(["/tmp/opened.md"]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "打开文件" }));
+    await waitFor(() => expect(bridge.dropHandler).toBeTypeOf("function"));
+
+    act(() => bridge.dropHandler!(["/tmp/cover.png"]));
+    await waitFor(() => expect(bridge.editorActions.insertImageFiles).toHaveBeenCalledWith(["/tmp/cover.png"]));
+  });
+
   it("maps native menu commands to find and every complex editor action", async () => {
     bridge.pickMarkdownFiles.mockResolvedValue(["/tmp/opened.md"]);
     render(<App />);
@@ -386,8 +503,21 @@ describe("product workflows", () => {
 
     for (const command of [
       "edit.find",
+      "edit.copy_code",
+      "format.source",
+      "format.paragraph",
+      "format.heading3",
+      "format.blockquote",
+      "format.bullet_list",
+      "format.ordered_list",
+      "format.task_list",
+      "format.code_block",
+      "format.horizontal_rule",
+      "format.image",
       "format.bold",
       "format.italic",
+      "format.strike",
+      "format.code",
       "format.link",
       "format.table",
       "format.mermaid",
@@ -395,8 +525,21 @@ describe("product workflows", () => {
     ]) act(() => bridge.menuHandler!(command));
 
     expect(await screen.findByRole("textbox", { name: "在文档中查找" })).toBeTruthy();
+    expect(bridge.editorActions.copyCode).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleSource).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.setParagraph).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleHeading).toHaveBeenCalledWith(3);
+    expect(bridge.editorActions.toggleBlockquote).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleBulletList).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleOrderedList).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleTaskList).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleCodeBlock).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.insertHorizontalRule).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.insertImage).toHaveBeenCalledOnce();
     expect(bridge.editorActions.toggleBold).toHaveBeenCalledOnce();
     expect(bridge.editorActions.toggleItalic).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleStrike).toHaveBeenCalledOnce();
+    expect(bridge.editorActions.toggleCode).toHaveBeenCalledOnce();
     expect(bridge.editorActions.editLink).toHaveBeenCalledOnce();
     expect(bridge.editorActions.insertTable).toHaveBeenCalledOnce();
     expect(bridge.editorActions.insertMermaid).toHaveBeenCalledOnce();
@@ -425,6 +568,10 @@ describe("product workflows", () => {
   it("exports PDF directly to the selected path", async () => {
     bridge.pickMarkdownFiles.mockResolvedValue(["/tmp/opened.md"]);
     bridge.pickExportSavePath.mockResolvedValue("/tmp/opened.pdf");
+    bridge.exportPdf.mockImplementation(async () => {
+      expect(document.documentElement.classList.contains("is-pdf-exporting")).toBe(true);
+      return "/tmp/opened.pdf";
+    });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "打开文件" }));
     await waitFor(() => expect(bridge.menuHandler).toBeTypeOf("function"));
@@ -432,6 +579,7 @@ describe("product workflows", () => {
     act(() => bridge.menuHandler!("file.export_pdf"));
 
     await waitFor(() => expect(bridge.exportPdf).toHaveBeenCalledWith("/tmp/opened.pdf"));
+    expect(document.documentElement.classList.contains("is-pdf-exporting")).toBe(false);
     expect(bridge.pickExportSavePath).toHaveBeenCalledWith("pdf", "/tmp/opened.pdf");
     expect(await screen.findByText("已导出 /tmp/opened.pdf")).toBeTruthy();
   });

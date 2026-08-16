@@ -6,6 +6,29 @@
   padding: clamp(28px, 5vh, 44px) 0 max(96px, 18vh);
 }
 
+.rendered-editor[hidden] {
+  display: none;
+}
+
+.markdown-source-editor {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: max(420px, calc(100dvh - 156px));
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: auto;
+  background: transparent;
+  color: var(--text);
+  caret-color: var(--accent);
+  font: 14px/1.72 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 .nolia-editor {
   min-height: max(320px, calc(100dvh - 156px));
   outline: none;
@@ -16,6 +39,17 @@
   line-height: 1.68;
   letter-spacing: 0;
   overflow-wrap: break-word;
+}
+
+.nolia-editor .find-match {
+  border-radius: 2px;
+  background: #ffe58f;
+  box-shadow: 0 0 0 1px rgb(151 112 0 / 12%);
+}
+
+.nolia-editor .find-match.is-current {
+  background: #ffbd59;
+  box-shadow: 0 0 0 1px rgb(127 76 0 / 24%);
 }
 
 .nolia-editor > *:first-child {
@@ -201,102 +235,43 @@
   font-size: 0.86em;
 }
 
-.markdown-inline-session {
-  display: inline;
-  max-width: 100%;
-  color: var(--text);
-  font: inherit;
-  line-height: inherit;
-  vertical-align: baseline;
+.nolia-editor .is-active-block-syntax,
+.nolia-editor .is-active-inline-syntax {
+  position: relative;
 }
 
-.markdown-inline-session.is-block {
-  display: block;
-  width: 100%;
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 1.6;
-}
-
-.markdown-inline-editor {
-  min-width: 1px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  caret-color: var(--accent);
-  font: inherit;
-  line-height: inherit;
-  letter-spacing: 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.markdown-inline-session.is-block .markdown-inline-editor {
-  display: block;
-  width: 100%;
-}
-
-.markdown-inline-editor:empty {
-  display: inline-block;
-  min-width: 1ch;
-}
-
-.markdown-inline-token.is-delimiter {
+.nolia-editor .is-active-block-syntax::before {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  margin-right: 8px;
   color: var(--text-faint);
+  content: attr(data-markdown-prefix);
   font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
-  font-size: 0.86em;
+  font-size: 0.82em;
   font-style: normal;
   font-weight: 400;
+  pointer-events: none;
+  white-space: pre;
+}
+
+.nolia-editor .is-active-inline-syntax::before,
+.nolia-editor .is-active-inline-syntax::after {
+  color: var(--text-faint);
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82em;
+  font-style: normal;
+  font-weight: 400;
+  pointer-events: none;
   text-decoration: none;
 }
 
-.markdown-inline-token.is-bold {
-  font-weight: 700;
+.nolia-editor .is-active-inline-syntax::before {
+  content: attr(data-markdown-prefix);
 }
 
-.markdown-inline-token.is-italic {
-  font-style: italic;
-}
-
-.markdown-inline-token.is-strike {
-  text-decoration: line-through;
-}
-
-.markdown-inline-token.is-code {
-  padding: 1px 3px;
-  border-radius: 3px;
-  background: var(--code-bg);
-  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
-  font-size: 0.84em;
-}
-
-.markdown-inline-token.is-link-destination {
-  color: var(--accent);
-  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
-  font-size: 0.88em;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-}
-
-.markdown-inline-session.has-source-error .markdown-inline-editor {
-  box-shadow: inset 0 -1px var(--danger);
-}
-
-.is-markdown-syntax-hidden-inline {
-  display: none;
-}
-
-.nolia-editor .is-markdown-syntax-hidden-node {
-  font-size: 0 !important;
-  line-height: 1.6;
-}
-
-.nolia-editor .is-markdown-syntax-hidden-node > :not(.markdown-inline-session) {
-  display: none !important;
+.nolia-editor .is-active-inline-syntax::after {
+  content: attr(data-markdown-suffix);
 }
 
 .nolia-editor .selectedCell::after {
@@ -737,21 +712,12 @@
   border-radius: 3px;
 }
 
-.markdown-image.is-selected {
-  box-shadow: 0 0 0 2px var(--accent);
-}
-
 .markdown-image img {
   display: block;
   width: auto;
   height: auto;
   max-width: 100%;
   border-radius: 3px;
-}
-
-.markdown-image-placeholder.is-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .markdown-image-placeholder span {

@@ -145,7 +145,7 @@ pub fn list_drafts(app: AppHandle) -> Result<Vec<RecoveryDraft>, ApiError> {
         .filter_map(|entry| fs::read(entry.path()).ok())
         .filter_map(|bytes| serde_json::from_slice::<RecoveryDraft>(&bytes).ok())
         .collect::<Vec<_>>();
-    drafts.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    drafts.sort_by_key(|draft| std::cmp::Reverse(draft.updated_at));
     drafts.truncate(5);
     Ok(drafts)
 }
@@ -216,6 +216,16 @@ pub fn list_recent_files(app: AppHandle) -> Result<Vec<RecentFile>, ApiError> {
 pub fn remove_recent_file(app: AppHandle, file_path: String) -> Result<Vec<RecentFile>, ApiError> {
     let mut store = load_recent_store(&app);
     store.files.retain(|item| item.file_path != file_path);
+    save_recent_store(&app, &store)?;
+    Ok(store.files)
+}
+
+#[tauri::command]
+pub fn clear_recent_files(app: AppHandle) -> Result<Vec<RecentFile>, ApiError> {
+    let store = RecentFileStore {
+        version: 1,
+        files: Vec::new(),
+    };
     save_recent_store(&app, &store)?;
     Ok(store.files)
 }

@@ -7,8 +7,8 @@ import type { DocumentSession } from "../app/documentSession";
 import type { RecentFile, RecoveryDraft } from "../bridge/contracts";
 import { DecisionDialog } from "./DecisionDialog";
 import { EditorErrorBoundary } from "./EditorErrorBoundary";
-import { EmptyState } from "./EmptyState";
 import { FindBar } from "./FindBar";
+import { HistorySidebar } from "./HistorySidebar";
 import { StatusBanner } from "./StatusBanner";
 import { TitleBar } from "./TitleBar";
 
@@ -24,7 +24,6 @@ const session = (overrides: Partial<DocumentSession> = {}): DocumentSession => (
   format: { encoding: "utf-8", encodingSupported: true, bom: false, preferredEol: "lf" },
   baseFingerprint: { sha256: "base", size: 6, mtimeMs: 1 },
   revision: 0,
-  savedRevision: 0,
   saveState: "clean",
   access: "writable",
   draftId: "draft-1",
@@ -43,29 +42,32 @@ describe("application page components", () => {
     consoleError.mockRestore();
   });
 
-  it("exposes only the two primary empty-state commands when no history exists", () => {
+  it("shows a left history surface without the former landing page", () => {
     const onNew = vi.fn();
     const onOpen = vi.fn();
     render(
-      <EmptyState
+      <HistorySidebar
         recentFiles={[]}
         drafts={[]}
         onNew={onNew}
         onOpen={onOpen}
         onOpenRecent={() => undefined}
         onRemoveRecent={() => undefined}
+        onClearRecent={() => undefined}
         onRecoverDraft={() => undefined}
       />
     );
-    expect(screen.getByRole("heading", { name: "Nolia Lite" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "最近文件" })).toBeNull();
+    expect(screen.getByRole("complementary", { name: "文件历史" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "历史" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Nolia Lite" })).toBeNull();
+    expect((screen.getByRole("button", { name: "清空历史" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "新建文档" }));
     fireEvent.click(screen.getByRole("button", { name: "打开文件" }));
     expect(onNew).toHaveBeenCalledOnce();
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
-  it("opens recovery and recent entries and removes a missing recent entry from the keyboard", () => {
+  it("opens recovery and recent entries and supports deleting or clearing history", () => {
     const draft: RecoveryDraft = {
       schemaVersion: 1,
       draftId: "draft-1",
@@ -86,24 +88,28 @@ describe("application page components", () => {
     const onRecoverDraft = vi.fn();
     const onOpenRecent = vi.fn();
     const onRemoveRecent = vi.fn();
+    const onClearRecent = vi.fn();
     render(
-      <EmptyState
+      <HistorySidebar
         recentFiles={[recent]}
         drafts={[draft]}
         onNew={() => undefined}
         onOpen={() => undefined}
         onOpenRecent={onOpenRecent}
         onRemoveRecent={onRemoveRecent}
+        onClearRecent={onClearRecent}
         onRecoverDraft={onRecoverDraft}
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /恢复稿/ }));
-    const recentButton = screen.getByRole("button", { name: /missing\.md/ });
+    const recentButton = screen.getByRole("button", { name: /^missing\.md/ });
     fireEvent.click(recentButton);
-    fireEvent.keyDown(recentButton, { key: "Delete" });
+    fireEvent.click(screen.getByRole("button", { name: "从历史中删除 missing.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空历史" }));
     expect(onRecoverDraft).toHaveBeenCalledWith(draft);
     expect(onOpenRecent).toHaveBeenCalledWith(recent);
     expect(onRemoveRecent).toHaveBeenCalledWith(recent.filePath);
+    expect(onClearRecent).toHaveBeenCalledOnce();
   });
 
   it("shows every save-state label and prevents a lossy encoding save", () => {

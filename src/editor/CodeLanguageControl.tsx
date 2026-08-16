@@ -29,7 +29,7 @@ export function normalizeCodeBlockLanguage(value: unknown): string {
   return languageAliases.get(normalized) ?? normalized;
 }
 
-async function copyText(text: string): Promise<void> {
+export async function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);

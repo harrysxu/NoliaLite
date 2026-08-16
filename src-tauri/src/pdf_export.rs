@@ -25,6 +25,14 @@ fn validate_pdf_path(path: &Path) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn validate_pdf_capture_size(width: f64, height: f64) -> Result<(), ApiError> {
+    if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+        Ok(())
+    } else {
+        Err(ApiError::invalid("The PDF capture size is invalid"))
+    }
+}
+
 fn create_pdf_target(path: &Path) -> Result<NamedTempFile, ApiError> {
     let parent = path
         .parent()
@@ -90,16 +98,28 @@ async fn wait_for_native_export(
 }
 
 #[tauri::command]
-pub async fn export_pdf(window: WebviewWindow, file_path: String) -> Result<String, ApiError> {
+pub async fn export_pdf(
+    window: WebviewWindow,
+    file_path: String,
+    capture_width: f64,
+    capture_height: f64,
+) -> Result<String, ApiError> {
     let path = PathBuf::from(file_path);
     validate_pdf_path(&path)?;
+    validate_pdf_capture_size(capture_width, capture_height)?;
     let temporary = create_pdf_target(&path)?;
     let temporary_path = temporary.path().to_path_buf();
     let (sender, receiver) = mpsc::channel();
 
     window
         .with_webview(move |webview| {
-            start_native_pdf_export(webview, temporary_path, sender);
+            start_native_pdf_export(
+                webview,
+                temporary_path,
+                capture_width,
+                capture_height,
+                sender,
+            );
         })
         .map_err(|error| ApiError::io("Cannot access the document WebView", error))?;
 
@@ -111,44 +131,49 @@ pub async fn export_pdf(window: WebviewWindow, file_path: String) -> Result<Stri
 fn start_native_pdf_export(
     webview: tauri::webview::PlatformWebview,
     path: PathBuf,
+    capture_width: f64,
+    capture_height: f64,
     sender: mpsc::Sender<Result<(), String>>,
 ) {
-    use objc2_app_kit::{NSPrintInfo, NSPrintJobSavingURL, NSPrintSaveJob};
-    use objc2_foundation::{NSCopying, NSString, NSURL};
-    use objc2_web_kit::WKWebView;
+    use block2::RcBlock;
+    use objc2::MainThreadMarker;
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    use objc2_foundation::{NSData, NSError, NSString};
+    use objc2_web_kit::{WKPDFConfiguration, WKWebView};
 
-    let result = unsafe {
+    unsafe {
         let view: &WKWebView = &*webview.inner().cast();
-        let print_info = NSPrintInfo::sharedPrintInfo().copy();
-        print_info.setJobDisposition(NSPrintSaveJob);
-        print_info.setTopMargin(0.0);
-        print_info.setRightMargin(0.0);
-        print_info.setBottomMargin(0.0);
-        print_info.setLeftMargin(0.0);
-
+        let configuration = WKPDFConfiguration::new(MainThreadMarker::from(view));
+        configuration.setRect(CGRect::new(
+            CGPoint::ZERO,
+            CGSize::new(capture_width, capture_height),
+        ));
         let output_path = NSString::from_str(path.to_string_lossy().as_ref());
-        let output_url = NSURL::fileURLWithPath(&output_path);
-        print_info
-            .dictionary()
-            .insert(NSPrintJobSavingURL, &output_url);
-
-        let operation = view.printOperationWithPrintInfo(&print_info);
-        operation.setShowsPrintPanel(false);
-        operation.setShowsProgressPanel(false);
-        operation.setCanSpawnSeparateThread(false);
-        if operation.runOperation() {
-            Ok(())
-        } else {
-            Err("macOS could not generate the PDF".to_string())
-        }
-    };
-    let _ = sender.send(result);
+        let completion = RcBlock::new(move |data: *mut NSData, error: *mut NSError| {
+            let result = if !error.is_null() {
+                Err(format!(
+                    "WebKit PDF generation failed: {}",
+                    (&*error).localizedDescription()
+                ))
+            } else if data.is_null() {
+                Err("WebKit returned no PDF data".to_string())
+            } else if (&*data).writeToFile_atomically(&output_path, false) {
+                Ok(())
+            } else {
+                Err("WebKit could not write the generated PDF".to_string())
+            };
+            let _ = sender.send(result);
+        });
+        view.createPDFWithConfiguration_completionHandler(Some(&configuration), &completion);
+    }
 }
 
 #[cfg(windows)]
 fn start_native_pdf_export(
     webview: tauri::webview::PlatformWebview,
     path: PathBuf,
+    _capture_width: f64,
+    _capture_height: f64,
     sender: mpsc::Sender<Result<(), String>>,
 ) {
     use webview2_com::{
@@ -200,6 +225,8 @@ fn start_native_pdf_export(
 fn start_native_pdf_export(
     webview: tauri::webview::PlatformWebview,
     path: PathBuf,
+    _capture_width: f64,
+    _capture_height: f64,
     sender: mpsc::Sender<Result<(), String>>,
 ) {
     use std::{cell::RefCell, rc::Rc};
@@ -242,6 +269,13 @@ mod tests {
         assert!(validate_pdf_path(Path::new("note.pdf")).is_ok());
         assert!(validate_pdf_path(Path::new("note.PDF")).is_ok());
         assert!(validate_pdf_path(Path::new("note.html")).is_err());
+    }
+
+    #[test]
+    fn accepts_only_positive_finite_capture_sizes() {
+        assert!(validate_pdf_capture_size(940.0, 2_400.0).is_ok());
+        assert!(validate_pdf_capture_size(0.0, 2_400.0).is_err());
+        assert!(validate_pdf_capture_size(940.0, f64::NAN).is_err());
     }
 
     #[test]

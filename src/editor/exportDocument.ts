@@ -78,10 +78,7 @@ export function snapshotEditorHtml(root: HTMLElement): string {
     pre.textContent = source;
     node.replaceChildren(pre);
   });
-  clone.querySelectorAll("textarea, .markdown-inline-session, .selection-toolbar, .table-toolbar, .code-language-control").forEach((node) => node.remove());
-  clone.querySelectorAll(".is-markdown-syntax-hidden-inline, .is-markdown-syntax-hidden-node").forEach((node) => {
-    node.classList.remove("is-markdown-syntax-hidden-inline", "is-markdown-syntax-hidden-node");
-  });
+  clone.querySelectorAll("textarea, .selection-toolbar, .table-toolbar, .code-language-control").forEach((node) => node.remove());
   clone.querySelectorAll(".is-selected, .is-editing, .selectedCell").forEach((node) => {
     node.classList.remove("is-selected", "is-editing", "selectedCell");
   });
@@ -97,9 +94,7 @@ export function snapshotEditorHtml(root: HTMLElement): string {
       if (/^on/i.test(attribute.name)) node.removeAttribute(attribute.name);
     }
     const href = node.getAttribute("href");
-    if (href && /^\s*(?:javascript|data):/i.test(href)) node.removeAttribute("href");
+    if (href && /^\s*(?:javascript|data|vbscript):/i.test(href)) node.removeAttribute("href");
   });
   return clone.innerHTML;
 }
-
-export const _testing = { escapeHtml, EXPORT_STYLE };

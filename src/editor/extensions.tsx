@@ -16,10 +16,11 @@ import { Code2, FileCode2, ImageOff, Shield } from "lucide-react";
 import { common, createLowlight } from "lowlight";
 import { useEffect, useState } from "react";
 
-import { readLocalImage } from "../bridge/tauriClient";
+import { readLocalImage, storeDocumentImage } from "../bridge/tauriClient";
 import { MermaidBlock, type DiagramViewerContent } from "./MermaidBlock";
 import { FootnoteBlock, FootnoteReference, InlineMath, MathBlock, SafeHtmlBlock } from "./ComplexBlocks";
 import { decodeProtectedRaw, parseTrackedMarkdown, TRACKING_ATTRIBUTES, type ProtectedKind } from "./sourceDocument";
+import { SyntaxVisibility } from "./SyntaxVisibility";
 
 const lowlight = createLowlight(common);
 
@@ -182,6 +183,7 @@ function ImageNodeView({
   const alt = String(node.attrs.alt ?? "");
   const markdown = String(node.attrs.markdown ?? imageMarkdownFromAttrs(node.attrs));
   const [resolvedSource, setResolvedSource] = useState<string>();
+  const [loadingSource, setLoadingSource] = useState(false);
   const [editing, setEditing] = useState(false);
   const [sourceError, setSourceError] = useState(false);
 
@@ -189,16 +191,21 @@ function ImageNodeView({
     const relative = localRelativeSource(source);
     if (!documentPath || !relative) {
       setResolvedSource(undefined);
+      setLoadingSource(false);
       return;
     }
     let active = true;
     setResolvedSource(undefined);
+    setLoadingSource(true);
     void readLocalImage(documentPath, relative)
       .then((value) => {
         if (active) setResolvedSource(value);
       })
       .catch(() => {
         if (active) setResolvedSource(undefined);
+      })
+      .finally(() => {
+        if (active) setLoadingSource(false);
       });
     return () => { active = false; };
   }, [documentPath, source]);
@@ -211,6 +218,7 @@ function ImageNodeView({
       tabIndex={0}
       role="group"
       aria-label="Markdown 图片"
+      data-export-pending={loadingSource ? "true" : undefined}
       onClick={(event: React.MouseEvent<HTMLDivElement>) => {
         if (event.target instanceof HTMLTextAreaElement) return;
         event.preventDefault();
@@ -343,6 +351,72 @@ function safeImage(documentPath?: string) {
   });
 }
 
+function imageFileExtension(file: File): string {
+  const fromName = file.name.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+  const supported = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg"]);
+  if (fromName && supported.has(fromName)) return fromName === "jpeg" ? "jpg" : fromName;
+  const subtype = file.type.split("/", 2)[1]?.toLowerCase();
+  const fromType = subtype === "svg+xml" ? "svg" : subtype === "jpeg" ? "jpg" : subtype;
+  return fromType && supported.has(fromType) ? fromType : "png";
+}
+
+async function storeDroppedImages(editor: Editor, documentPath: string, files: File[], position?: number): Promise<void> {
+  const content: Array<{ type: string; attrs: Record<string, string> }> = [];
+  for (const file of files) {
+    const extension = imageFileExtension(file);
+    const originalName = file.name.trim();
+    const hasImageExtension = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(originalName);
+    const baseName = originalName.replace(/\.[^.]+$/, "") || `pasted-image-${Date.now()}`;
+    const fileName = hasImageExtension ? originalName : `${baseName}.${extension}`;
+    const source = await storeDocumentImage(documentPath, fileName, new Uint8Array(await file.arrayBuffer()));
+    const alt = fileName.replace(/\.[^.]+$/, "").replace(/([\\\]])/g, "\\$1");
+    content.push({
+      type: "image",
+      attrs: { src: source, alt, markdown: `![${alt}](${source})` }
+    });
+  }
+  if (!content.length) return;
+  const chain = editor.chain().focus();
+  if (typeof position === "number") chain.insertContentAt(position, content).run();
+  else chain.insertContent(content).run();
+}
+
+function imagePasteAndDrop(documentPath?: string, onError?: (message: string) => void) {
+  return Extension.create({
+    name: "imagePasteAndDrop",
+    addProseMirrorPlugins() {
+      const editor = this.editor;
+      return [
+        new Plugin({
+          props: {
+            handlePaste(_view, event) {
+              if (!documentPath || !editor.isEditable) return false;
+              const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+              if (!files.length) return false;
+              event.preventDefault();
+              void storeDroppedImages(editor, documentPath, files).catch((error) => {
+                onError?.(`插入图片失败：${error instanceof Error ? error.message : String(error)}`);
+              });
+              return true;
+            },
+            handleDrop(view, event) {
+              if (!documentPath || !editor.isEditable) return false;
+              const files = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type.startsWith("image/"));
+              if (!files.length) return false;
+              event.preventDefault();
+              const position = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+              void storeDroppedImages(editor, documentPath, files, position).catch((error) => {
+                onError?.(`插入图片失败：${error instanceof Error ? error.message : String(error)}`);
+              });
+              return true;
+            }
+          }
+        })
+      ];
+    }
+  });
+}
+
 const PlainTextPaste = Extension.create({
   name: "plainTextPaste",
   addProseMirrorPlugins() {
@@ -351,6 +425,7 @@ const PlainTextPaste = Extension.create({
       new Plugin({
         props: {
           handlePaste(view, event) {
+            if (!editor.isEditable) return false;
             const clipboard = event.clipboardData;
             if (!clipboard) return false;
             const text = clipboard.getData("text/plain");
@@ -485,17 +560,19 @@ const MarkdownTaskItem = TaskItem.extend({
   }
 }).configure({ nested: true });
 
-function isAllowedLink(value: string): boolean {
+export function isAllowedLink(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return false;
   if (/^(javascript|data|vbscript):/i.test(trimmed)) return false;
-  return /^(https?:|mailto:|#|\/|\.\.?\/)/i.test(trimmed) || !/^[a-z][a-z\d+.-]*:/i.test(trimmed);
+  if (/^(?:\/|\\|\.\.\/)/.test(trimmed)) return false;
+  return /^(https?:|mailto:|tel:|ftp:|file:|#|\.\/)/i.test(trimmed) || !/^[a-z][a-z\d+.-]*:/i.test(trimmed);
 }
 
 export function createEditorExtensions(
   documentPath?: string,
   onOpenDiagram?: (content: DiagramViewerContent) => void,
-  editable = true
+  editable = true,
+  onError?: (message: string) => void
 ) {
   return [
     StarterKit.configure({
@@ -521,6 +598,7 @@ export function createEditorExtensions(
       table: { resizable: false, renderWrapper: true, allowTableNodeSelection: true }
     }),
     safeImage(documentPath),
+    imagePasteAndDrop(documentPath, onError),
     Placeholder.configure({ placeholder: "" }),
     MermaidBlock.configure({ onOpenDiagram }),
     MathBlock,
@@ -530,6 +608,7 @@ export function createEditorExtensions(
     FootnoteBlock,
     ProtectedBlock,
     SourceTracking,
+    SyntaxVisibility.configure({ enabled: editable }),
     PlainTextPaste,
     MarkdownNodeCopy,
     Markdown.configure({ indentation: { style: "space", size: 2 } })

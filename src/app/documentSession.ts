@@ -19,12 +19,10 @@ export type DocumentSession = {
   format: DocumentFormat;
   baseFingerprint: FileFingerprint | { sha256: "new"; size: 0; mtimeMs: 0 };
   revision: number;
-  savedRevision: number;
   saveState: SaveState;
   access: AccessState;
   draftId: string;
   externalState?: ExternalState;
-  lastError?: string;
 };
 
 const defaultFormat: DocumentFormat = {
@@ -48,7 +46,6 @@ export function createUntitledSession(draft?: RecoveryDraft): DocumentSession {
       : defaultFormat,
     baseFingerprint: { sha256: "new", size: 0, mtimeMs: 0 },
     revision,
-    savedRevision: 0,
     saveState: markdown ? "dirty" : "clean",
     access: "writable",
     draftId: draft?.draftId ?? crypto.randomUUID()
@@ -76,7 +73,6 @@ export function createFileSession(
     format: result.format,
     baseFingerprint: result.fingerprint,
     revision: recoveredDraft?.revision ?? 0,
-    savedRevision: 0,
     saveState: recovered ? (draftConflicts ? "conflict" : "dirty") : "clean",
     access,
     draftId: result.draftId,
@@ -96,10 +92,9 @@ type SessionAction =
       filePath: string;
       fingerprint: FileFingerprint;
     }
-  | { type: "saveFailed"; sessionId: string; state: Exclude<SaveState, "clean" | "dirty" | "saving">; message?: string }
+  | { type: "saveFailed"; sessionId: string; state: Exclude<SaveState, "clean" | "dirty" | "saving"> }
   | { type: "external"; sessionId: string; state?: ExternalState }
-  | { type: "keepCurrent"; sessionId: string }
-  | { type: "setClean"; sessionId: string };
+  | { type: "keepCurrent"; sessionId: string };
 
 export function documentSessionReducer(
   session: DocumentSession | undefined,
@@ -117,12 +112,11 @@ export function documentSessionReducer(
         ...session,
         markdown: action.markdown,
         revision,
-        saveState: clean ? "clean" : session.externalState ? "conflict" : "dirty",
-        lastError: undefined
+        saveState: clean ? "clean" : session.externalState ? "conflict" : "dirty"
       };
     }
     case "saveStarted":
-      return { ...session, saveState: "saving", lastError: undefined };
+      return { ...session, saveState: "saving" };
     case "saveSucceeded": {
       const currentWasSaved = session.revision === action.requestRevision;
       return {
@@ -132,15 +126,13 @@ export function documentSessionReducer(
         displayName: action.filePath.split(/[\\/]/).pop() || session.displayName,
         baseFingerprint: action.fingerprint,
         savedMarkdown: action.savedMarkdown,
-        savedRevision: action.requestRevision,
         saveState: currentWasSaved ? "clean" : "dirty",
         access: "writable",
-        externalState: undefined,
-        lastError: undefined
+        externalState: undefined
       };
     }
     case "saveFailed":
-      return { ...session, saveState: action.state, lastError: action.message };
+      return { ...session, saveState: action.state };
     case "external":
       return {
         ...session,
@@ -158,7 +150,5 @@ export function documentSessionReducer(
         externalState: "changed",
         saveState: "conflict"
       };
-    case "setClean":
-      return { ...session, saveState: "clean", externalState: undefined, lastError: undefined };
   }
 }

@@ -3,10 +3,12 @@ import { lazy, Suspense, useCallback, useEffect, useReducer, useRef, useState } 
 import type { RecentFile, RecoveryDraft, SaveMode } from "../bridge/contracts";
 import {
   answerQuitRequest,
+  clearRecentFiles,
   closeCurrentWindow,
   createDocumentWindow,
   deleteDraft,
   exportPdf,
+  focusExistingDocumentWindow,
   inspectDocument,
   isTauriRuntime,
   listDrafts,
@@ -14,9 +16,11 @@ import {
   onCloseRequested,
   onDocumentFileEvent,
   onMenuCommand,
+  onNavigateDocumentHeading,
   onOpenDocumentPaths,
   onQuitRequested,
   onWindowFileDrop,
+  openDocumentWindowAt,
   openDocumentWindows,
   openExternalUrl,
   pickExportSavePath,
@@ -29,14 +33,15 @@ import {
   setWindowDocument,
   setWindowTitle,
   stopDocumentWatch,
+  takePendingHeadingFragment,
   takePendingOpenPaths,
   watchDocument,
   writeExportDocument,
   writeDraft
 } from "../bridge/tauriClient";
 import { DecisionDialog, type DecisionSpec } from "../components/DecisionDialog";
-import { EmptyState } from "../components/EmptyState";
 import { FindBar } from "../components/FindBar";
+import { HistorySidebar } from "../components/HistorySidebar";
 import { StatusBanner } from "../components/StatusBanner";
 import { TitleBar } from "../components/TitleBar";
 import type { FindResult, MarkdownEditorHandle } from "../editor/MarkdownEditor";
@@ -66,20 +71,12 @@ function isMarkdownPath(path: string): boolean {
   return /\.(md|markdown)$/i.test(path);
 }
 
-function externalMarkdownHref(href: string): boolean {
-  return /^(?:https?:|mailto:)/i.test(href);
+function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(path);
 }
 
-async function waitForPdfAssets(): Promise<void> {
-  await document.fonts?.ready;
-  const images = Array.from(document.querySelectorAll<HTMLImageElement>(".nolia-editor img"));
-  await Promise.all(images.map(async (image) => {
-    if (image.complete) return;
-    await new Promise<void>((resolve) => {
-      image.addEventListener("load", () => resolve(), { once: true });
-      image.addEventListener("error", () => resolve(), { once: true });
-    });
-  }));
+function externalMarkdownHref(href: string): boolean {
+  return /^(?:https?:|mailto:|tel:|ftp:|file:)/i.test(href);
 }
 
 function splitMarkdownHref(href: string): { path: string; fragment?: string } | undefined {
@@ -101,7 +98,7 @@ export function App() {
   const [session, dispatch] = useReducer(documentSessionReducer, undefined);
   const sessionRef = useRef<DocumentSession | undefined>(undefined);
   const editorRef = useRef<MarkdownEditorHandle>(null);
-  const bypassCloseRef = useRef(false);
+  const closeInFlightRef = useRef(false);
   const saveInFlightRef = useRef(false);
   const guardInFlightRef = useRef<Promise<boolean> | undefined>(undefined);
   const [recentFiles, setRecentFiles] = useState<Awaited<ReturnType<typeof listRecentFiles>>>([]);
@@ -164,22 +161,33 @@ export function App() {
       return true;
     }
     if (saveInFlightRef.current) return false;
+    saveInFlightRef.current = true;
 
     let mode = requestedMode;
     let filePath = current.filePath;
     if (!filePath || requestedMode === "saveAs" || current.access === "readonly-permission") {
       mode = "saveAs";
       const defaultPath = current.filePath ?? `${current.displayName === "未命名" ? "未命名" : current.displayName}.md`;
-      filePath = await pickMarkdownSavePath(defaultPath);
+      try {
+        filePath = await pickMarkdownSavePath(defaultPath);
+      } catch (error) {
+        saveInFlightRef.current = false;
+        showNotice(errorMessage(error));
+        return false;
+      }
       if (!filePath) {
+        saveInFlightRef.current = false;
         if (!isTauriRuntime()) showNotice("请在桌面应用中选择保存位置。");
         return false;
       }
     }
+    if (await focusExistingDocumentWindow(filePath)) {
+      saveInFlightRef.current = false;
+      return false;
+    }
 
     const revision = current.revision;
     const markdown = current.markdown;
-    saveInFlightRef.current = true;
     dispatch({ type: "saveStarted", sessionId: current.sessionId });
     try {
       const result = await saveDocument({
@@ -200,7 +208,11 @@ export function App() {
           filePath: result.filePath,
           fingerprint: result.fingerprint
         });
-        await refreshLibrary();
+        try {
+          await refreshLibrary();
+        } catch (error) {
+          showNotice(`文档已保存，但无法刷新历史：${errorMessage(error)}`);
+        }
         return true;
       }
       if (result.status === "conflict") {
@@ -211,8 +223,7 @@ export function App() {
         dispatch({
           type: "saveFailed",
           sessionId: current.sessionId,
-          state: "error",
-          message: result.status === "readonly" ? result.reason : result.message
+          state: "error"
         });
       }
       await persistDraft({ ...current, saveState: "error" });
@@ -221,8 +232,7 @@ export function App() {
       dispatch({
         type: "saveFailed",
         sessionId: current.sessionId,
-        state: "error",
-        message: errorMessage(error)
+        state: "error"
       });
       await persistDraft({ ...current, saveState: "error" });
       return false;
@@ -288,6 +298,7 @@ export function App() {
       showNotice("只能打开 .md 或 .markdown 文件。");
       return false;
     }
+    if (await focusExistingDocumentWindow(filePath)) return false;
     if (options.guard !== false && !(await guardCurrent("switch"))) return false;
 
     try {
@@ -352,7 +363,7 @@ export function App() {
     window.requestAnimationFrame(jump);
   }, [showNotice]);
 
-  const openMarkdownLink = useCallback(async (href: string) => {
+  const openMarkdownLink = useCallback(async (href: string, options: { newWindow?: boolean } = {}) => {
     const trimmed = href.trim();
     if (!trimmed) return;
     if (externalMarkdownHref(trimmed)) {
@@ -379,8 +390,13 @@ export function App() {
     }
     try {
       const resolved = await resolveMarkdownLink(current.filePath, target.path);
-      if (resolved !== current.filePath && !(await openPath(resolved))) return;
-      if (target.fragment) jumpToHeadingSoon(target.fragment);
+      if (options.newWindow) {
+        if (target.fragment) await openDocumentWindowAt(resolved, target.fragment);
+        else await openDocumentWindows([resolved]);
+      } else {
+        if (resolved !== current.filePath && !(await openPath(resolved))) return;
+        if (target.fragment) jumpToHeadingSoon(target.fragment);
+      }
     } catch (error) {
       showNotice(`无法打开链接：${errorMessage(error)}`);
     }
@@ -415,8 +431,20 @@ export function App() {
   }, [guardCurrent, openPathsInWindows]);
 
   const removeRecent = useCallback(async (filePath: string) => {
-    setRecentFiles(await removeRecentFile(filePath));
-  }, []);
+    try {
+      setRecentFiles(await removeRecentFile(filePath));
+    } catch (error) {
+      showNotice(errorMessage(error));
+    }
+  }, [showNotice]);
+
+  const clearRecent = useCallback(async () => {
+    try {
+      setRecentFiles(await clearRecentFiles());
+    } catch (error) {
+      showNotice(errorMessage(error));
+    }
+  }, [showNotice]);
 
   const openRecent = useCallback(async (file: RecentFile) => {
     if (file.available) {
@@ -472,11 +500,6 @@ export function App() {
       showNotice("请先打开或新建一份文档。");
       return;
     }
-    const body = editorRef.current?.getExportHtml() ?? "";
-    if (!body) {
-      showNotice("文档仍在载入，请稍后重试。");
-      return;
-    }
     const baseName = current.displayName.replace(/\.(md|markdown)$/i, "") || "未命名";
     const extension = format === "pdf" ? "pdf" : "html";
     const defaultPath = current.filePath
@@ -485,13 +508,26 @@ export function App() {
     const filePath = await pickExportSavePath(format, defaultPath);
     if (!filePath) return;
     try {
-      const outputPath = format === "pdf"
-        ? await waitForPdfAssets().then(() => exportPdf(filePath))
-        : await writeExportDocument({
-            filePath,
-            format: "html",
-            content: createExportHtml(baseName, body)
-          });
+      await editorRef.current?.prepareExport();
+      const body = editorRef.current?.getExportHtml() ?? "";
+      if (!body) throw new Error("文档仍在载入，请稍后重试。");
+      let outputPath: string | undefined;
+      if (format === "pdf") {
+        const root = document.documentElement;
+        root.classList.add("is-pdf-exporting");
+        void root.offsetHeight;
+        try {
+          outputPath = await exportPdf(filePath);
+        } finally {
+          root.classList.remove("is-pdf-exporting");
+        }
+      } else {
+        outputPath = await writeExportDocument({
+          filePath,
+          format: "html",
+          content: createExportHtml(baseName, body)
+        });
+      }
       showNotice(`已导出 ${outputPath ?? filePath}`);
     } catch (error) {
       showNotice(`导出失败：${errorMessage(error)}`);
@@ -500,8 +536,13 @@ export function App() {
 
   const updateFind = useCallback((query: string, direction: "next" | "previous" = "next") => {
     setFindQuery(query);
-    setFindResult(query ? editorRef.current?.find(query, direction) ?? emptyFindResult : emptyFindResult);
+    setFindResult(editorRef.current?.find(query, direction) ?? emptyFindResult);
   }, []);
+
+  const copyCurrentCode = useCallback(async () => {
+    const copied = await editorRef.current?.copyCode();
+    if (!copied) showNotice("请先将光标置于代码块内。");
+  }, [showNotice]);
 
   useEffect(() => {
     void refreshLibrary();
@@ -549,6 +590,8 @@ export function App() {
       return;
     }
     const sessionId = session.sessionId;
+    const watchedPath = session.filePath;
+    let disposed = false;
     let unlisten: () => void = () => undefined;
     let debounceTimer: number | undefined;
     const check = async () => {
@@ -562,19 +605,27 @@ export function App() {
       if (debounceTimer) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout(() => void check(), 120);
     };
-    void onDocumentFileEvent((filePath) => {
-      if (filePath === session.filePath) scheduleCheck();
-    }).then((stopListening) => {
+    void (async () => {
+      const stopListening = await onDocumentFileEvent((filePath) => {
+        if (filePath === watchedPath) scheduleCheck();
+      });
+      if (disposed) {
+        stopListening();
+        return;
+      }
       unlisten = stopListening;
-      return watchDocument(session.filePath!);
-    }).catch(() => undefined);
+      await watchDocument(watchedPath);
+      if (disposed) await stopDocumentWatch(watchedPath);
+    })().catch(() => undefined);
     const timer = window.setInterval(() => void check(), 10000);
     const onFocus = () => void check();
     window.addEventListener("focus", onFocus);
     return () => {
+      disposed = true;
       window.clearInterval(timer);
       if (debounceTimer) window.clearTimeout(debounceTimer);
       unlisten();
+      void stopDocumentWatch(watchedPath);
       window.removeEventListener("focus", onFocus);
     };
   }, [session?.filePath, session?.sessionId]);
@@ -582,22 +633,45 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     let unlisteners: Array<() => void> = [];
-    const handlePaths = (paths: string[]) => {
-      if (paths.length) void openPathsInWindows(paths);
+    const handlePaths = async (paths: string[]) => {
+      if (paths.length) await openPathsInWindows(paths);
+    };
+    const handleDropPaths = (paths: string[]) => {
+      const documents = paths.filter(isMarkdownPath);
+      const images = paths.filter(isImagePath);
+      if (documents.length) void openPathsInWindows(documents);
+      if (images.length) {
+        const current = sessionRef.current;
+        if (!current?.filePath) {
+          showNotice("请先保存当前文档，再插入图片。");
+        } else if (current.access === "writable") {
+          void editorRef.current?.insertImageFiles(images).catch((error) => showNotice(`插入图片失败：${errorMessage(error)}`));
+        }
+      }
     };
     const drainPendingOpenPaths = () => {
-      void takePendingOpenPaths().then(handlePaths).catch(() => undefined);
+      void (async () => {
+        await handlePaths(await takePendingOpenPaths());
+        const fragment = await takePendingHeadingFragment();
+        if (fragment) jumpToHeadingSoon(fragment);
+      })().catch(() => undefined);
     };
     const requestClose = () => {
-      if (bypassCloseRef.current) return;
+      if (closeInFlightRef.current) return;
+      closeInFlightRef.current = true;
       void guardCurrent("close").then((allowed) => {
-        if (!allowed) return;
-        bypassCloseRef.current = true;
+        if (!allowed) {
+          closeInFlightRef.current = false;
+          return;
+        }
         void closeCurrentWindow().catch((error) => {
-          bypassCloseRef.current = false;
+          closeInFlightRef.current = false;
           showNotice(errorMessage(error));
         });
-      }).catch((error) => showNotice(errorMessage(error)));
+      }).catch((error) => {
+        closeInFlightRef.current = false;
+        showNotice(errorMessage(error));
+      });
     };
     const requestQuit = (requestId: number) => {
       void guardCurrent("close")
@@ -606,13 +680,10 @@ export function App() {
     };
     const register = async () => {
       const registrations = await Promise.allSettled([
-        onOpenDocumentPaths(handlePaths),
-        onWindowFileDrop(handlePaths),
-        onCloseRequested((preventDefault) => {
-          if (bypassCloseRef.current) return;
-          preventDefault();
-          requestClose();
-        }),
+        onOpenDocumentPaths((paths) => void handlePaths(paths)),
+        onNavigateDocumentHeading(jumpToHeadingSoon),
+        onWindowFileDrop(handleDropPaths),
+        onCloseRequested(requestClose),
         onQuitRequested(requestQuit),
         onMenuCommand((command) => {
           if (command === "file.new") void newDocument();
@@ -622,8 +693,24 @@ export function App() {
           else if (command === "file.export_html") void exportCurrent("html");
           else if (command === "file.export_pdf") void exportCurrent("pdf");
           else if (command === "edit.find") setFindOpen(true);
+          else if (command === "edit.copy_code") void copyCurrentCode();
+          else if (command === "format.source") editorRef.current?.toggleSource();
+          else if (command === "format.paragraph") editorRef.current?.setParagraph();
+          else if (command.startsWith("format.heading")) editorRef.current?.toggleHeading(Number(command.slice(-1)) as 1 | 2 | 3 | 4 | 5 | 6);
           else if (command === "format.bold") editorRef.current?.toggleBold();
           else if (command === "format.italic") editorRef.current?.toggleItalic();
+          else if (command === "format.strike") editorRef.current?.toggleStrike();
+          else if (command === "format.code") editorRef.current?.toggleCode();
+          else if (command === "format.blockquote") editorRef.current?.toggleBlockquote();
+          else if (command === "format.bullet_list") editorRef.current?.toggleBulletList();
+          else if (command === "format.ordered_list") editorRef.current?.toggleOrderedList();
+          else if (command === "format.task_list") editorRef.current?.toggleTaskList();
+          else if (command === "format.code_block") editorRef.current?.toggleCodeBlock();
+          else if (command === "format.horizontal_rule") editorRef.current?.insertHorizontalRule();
+          else if (command === "format.image") {
+            if (!sessionRef.current?.filePath) showNotice("请先保存当前文档，再插入图片。");
+            else void editorRef.current?.insertImage().catch((error) => showNotice(`插入图片失败：${errorMessage(error)}`));
+          }
           else if (command === "format.link") editorRef.current?.editLink();
           else if (command === "format.table") editorRef.current?.insertTable();
           else if (command === "format.mermaid") editorRef.current?.insertMermaid();
@@ -638,7 +725,9 @@ export function App() {
         return;
       }
       unlisteners = registered;
-      handlePaths(await takePendingOpenPaths());
+      await handlePaths(await takePendingOpenPaths());
+      const fragment = await takePendingHeadingFragment();
+      if (fragment) jumpToHeadingSoon(fragment);
     };
     window.addEventListener("focus", drainPendingOpenPaths);
     void register();
@@ -647,11 +736,11 @@ export function App() {
       unlisteners.forEach((unlisten) => unlisten());
       window.removeEventListener("focus", drainPendingOpenPaths);
     };
-  }, [exportCurrent, guardCurrent, newDocument, openPathsInWindows, openPicker, saveCurrent, showNotice]);
+  }, [copyCurrentCode, exportCurrent, guardCurrent, jumpToHeadingSoon, newDocument, openPathsInWindows, openPicker, saveCurrent, showNotice]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!(event.metaKey || event.ctrlKey) || (event.metaKey && event.ctrlKey) || event.altKey) return;
       const key = event.key.toLowerCase();
       if (key === "n") {
         event.preventDefault();
@@ -674,11 +763,27 @@ export function App() {
       } else if (key === "k" && sessionRef.current?.access === "writable") {
         event.preventDefault();
         editorRef.current?.editLink();
+      } else if (key === "c" && event.shiftKey) {
+        event.preventDefault();
+        void copyCurrentCode();
+      } else if (key === "/") {
+        event.preventDefault();
+        editorRef.current?.toggleSource();
+      } else if (!event.shiftKey && /^[0-6]$/.test(key) && sessionRef.current?.access === "writable") {
+        event.preventDefault();
+        if (key === "0") editorRef.current?.setParagraph();
+        else editorRef.current?.toggleHeading(Number(key) as 1 | 2 | 3 | 4 | 5 | 6);
+      } else if (event.shiftKey && event.code === "Digit7" && sessionRef.current?.access === "writable") {
+        event.preventDefault();
+        editorRef.current?.toggleOrderedList();
+      } else if (event.shiftKey && event.code === "Digit8" && sessionRef.current?.access === "writable") {
+        event.preventDefault();
+        editorRef.current?.toggleBulletList();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [newDocument, openPicker, saveCurrent]);
+  }, [copyCurrentCode, newDocument, openPicker, saveCurrent]);
 
   const banner = (() => {
     if (notice) return <StatusBanner tone="info" message={notice} />;
@@ -748,12 +853,13 @@ export function App() {
               onPrevious={() => updateFind(findQuery, "previous")}
               onNext={() => updateFind(findQuery, "next")}
               onClose={() => {
+                editorRef.current?.find("");
                 setFindOpen(false);
                 editorRef.current?.focus();
               }}
             />
           ) : null}
-          <EditorErrorBoundary key={session.sessionId}>
+          <EditorErrorBoundary key={`${session.sessionId}:${session.filePath ?? ""}:${session.access}`}>
             <Suspense fallback={<div className="editor-loading" aria-label="正在载入文档" />}>
               <MarkdownEditor
                 ref={editorRef}
@@ -763,19 +869,21 @@ export function App() {
                 editable={session.access === "writable"}
                 autofocus={session.kind === "untitled"}
                 onChange={(markdown) => dispatch({ type: "edit", sessionId: session.sessionId, markdown })}
-                onOpenLink={(href) => void openMarkdownLink(href)}
+                onOpenLink={(href, options) => void openMarkdownLink(href, options)}
+                onError={showNotice}
               />
             </Suspense>
           </EditorErrorBoundary>
         </main>
       ) : (
-        <EmptyState
+        <HistorySidebar
           recentFiles={recentFiles}
           drafts={drafts}
           onNew={() => void newDocument()}
           onOpen={() => void openPicker()}
           onOpenRecent={(file) => void openRecent(file)}
           onRemoveRecent={(path) => void removeRecent(path)}
+          onClearRecent={() => void clearRecent()}
           onRecoverDraft={(draft) => void recoverDraft(draft)}
         />
       )}

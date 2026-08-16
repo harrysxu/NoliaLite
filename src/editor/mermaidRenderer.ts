@@ -40,12 +40,3 @@ export function renderMermaidSvg(source: string, idPrefix = "nolia-lite-mermaid"
   renderQueue = job.then(() => undefined, () => undefined);
   return job;
 }
-
-export const _testing = {
-  reset() {
-    modulePromise = undefined;
-    configuredTheme = undefined;
-    renderSequence = 0;
-    renderQueue = Promise.resolve();
-  }
-};

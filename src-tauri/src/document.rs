@@ -18,6 +18,7 @@ use crate::{
 
 const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
 const MAX_LOCAL_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+const ASSET_DIRECTORY: &str = "assets";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,6 +272,133 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn document_asset_directory(document: &Path) -> Result<PathBuf, ApiError> {
+    validate_markdown_path(document)?;
+    let parent = document
+        .parent()
+        .ok_or_else(|| ApiError::invalid("The Markdown path has no parent directory"))?;
+    let root = parent
+        .canonicalize()
+        .map_err(|error| ApiError::io("Cannot resolve the document directory", error))?;
+    let directory = root.join(ASSET_DIRECTORY);
+    fs::create_dir_all(&directory)
+        .map_err(|error| ApiError::io("Cannot create the document asset directory", error))?;
+    let canonical = directory
+        .canonicalize()
+        .map_err(|error| ApiError::io("Cannot resolve the document asset directory", error))?;
+    if !canonical.starts_with(&root) {
+        return Err(ApiError::invalid(
+            "The document asset directory is outside the document directory",
+        ));
+    }
+    Ok(canonical)
+}
+
+fn available_asset_path(
+    directory: &Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, ApiError> {
+    let requested = Path::new(file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::invalid("The image file name is invalid"))?;
+    let requested_path = Path::new(requested);
+    image_mime_type(requested_path)
+        .ok_or_else(|| ApiError::invalid("The local image format is not supported"))?;
+    let stem = requested_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let extension = requested_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png");
+
+    for index in 1..=10_000 {
+        let candidate_name = if index == 1 {
+            requested.to_string()
+        } else {
+            format!("{stem}-{index}.{extension}")
+        };
+        let candidate = directory.join(candidate_name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        if fs::read(&candidate).is_ok_and(|existing| existing == bytes) {
+            return Ok(candidate);
+        }
+    }
+    Err(ApiError::invalid("Cannot allocate an image asset name"))
+}
+
+fn write_document_image(
+    document: &Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<String, ApiError> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_LOCAL_IMAGE_BYTES {
+        return Err(ApiError::invalid(
+            "The local image is empty or larger than 25 MB",
+        ));
+    }
+    let directory = document_asset_directory(document)?;
+    let destination = available_asset_path(&directory, file_name, bytes)?;
+    if !destination.exists() {
+        let mut temporary = NamedTempFile::new_in(&directory)
+            .map_err(|error| ApiError::io("Cannot create a temporary image asset", error))?;
+        temporary
+            .write_all(bytes)
+            .map_err(|error| ApiError::io("Cannot write the image asset", error))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| ApiError::io("Cannot sync the image asset", error))?;
+        temporary
+            .persist(&destination)
+            .map_err(|error| ApiError::io("Cannot install the image asset", error.error))?;
+    }
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| ApiError::invalid("The image asset name is invalid"))?;
+    Ok(format!("{ASSET_DIRECTORY}/{name}"))
+}
+
+#[tauri::command]
+pub fn import_document_image(
+    document_path: String,
+    image_path: String,
+) -> Result<String, ApiError> {
+    let source = PathBuf::from(image_path);
+    let metadata = fs::metadata(&source)
+        .map_err(|error| ApiError::io("Cannot read local image metadata", error))?;
+    if !metadata.is_file() || metadata.len() > MAX_LOCAL_IMAGE_BYTES {
+        return Err(ApiError::invalid(
+            "The local image is unavailable or larger than 25 MB",
+        ));
+    }
+    image_mime_type(&source)
+        .ok_or_else(|| ApiError::invalid("The local image format is not supported"))?;
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| ApiError::invalid("The image file name is invalid"))?;
+    let bytes =
+        fs::read(&source).map_err(|error| ApiError::io("Cannot read the local image", error))?;
+    write_document_image(Path::new(&document_path), file_name, &bytes)
+}
+
+#[tauri::command]
+pub fn store_document_image(
+    document_path: String,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<String, ApiError> {
+    write_document_image(Path::new(&document_path), &file_name, &bytes)
+}
+
 #[tauri::command]
 pub fn read_local_image(document_path: String, image_source: String) -> Result<String, ApiError> {
     let document = PathBuf::from(document_path);
@@ -289,10 +417,18 @@ pub fn read_local_image(document_path: String, image_source: String) -> Result<S
     let parent = document
         .parent()
         .ok_or_else(|| ApiError::invalid("The Markdown path has no parent directory"))?;
-    let image_path = parent
+    let root = parent
+        .canonicalize()
+        .map_err(|error| ApiError::io("Cannot resolve the Markdown directory", error))?;
+    let image_path = root
         .join(relative)
         .canonicalize()
         .map_err(|error| ApiError::io("Cannot resolve the local image", error))?;
+    if !image_path.starts_with(&root) {
+        return Err(ApiError::invalid(
+            "The local image must remain inside the Markdown directory",
+        ));
+    }
     let metadata = fs::metadata(&image_path)
         .map_err(|error| ApiError::io("Cannot read local image metadata", error))?;
     if !metadata.is_file() || metadata.len() > MAX_LOCAL_IMAGE_BYTES {
@@ -558,12 +694,57 @@ mod tests {
     }
 
     #[test]
-    fn loads_only_relative_local_images() {
+    fn imports_images_into_a_relative_assets_directory_without_overwriting() {
         let directory = tempfile::tempdir().expect("tempdir");
         let document = directory.path().join("note.md");
-        let image = directory.path().join("cover.png");
+        let first = directory.path().join("cover.png");
+        let second_directory = directory.path().join("other");
+        fs::create_dir(&second_directory).expect("create second directory");
+        let second = second_directory.join("cover.png");
+        fs::write(&document, b"# Note").expect("write document");
+        fs::write(&first, [0x89, b'P', b'N', b'G']).expect("write first image");
+        fs::write(&second, [0x89, b'P', b'N', b'2']).expect("write second image");
+
+        let first_relative = import_document_image(
+            document.to_string_lossy().into_owned(),
+            first.to_string_lossy().into_owned(),
+        )
+        .expect("import first image");
+        let duplicate_relative = import_document_image(
+            document.to_string_lossy().into_owned(),
+            first.to_string_lossy().into_owned(),
+        )
+        .expect("reuse duplicate image");
+        let second_relative = import_document_image(
+            document.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        )
+        .expect("import second image");
+
+        assert_eq!(first_relative, "assets/cover.png");
+        assert_eq!(duplicate_relative, first_relative);
+        assert_eq!(second_relative, "assets/cover-2.png");
+        assert_eq!(
+            fs::read(directory.path().join(&first_relative)).unwrap(),
+            [0x89, b'P', b'N', b'G']
+        );
+        assert_eq!(
+            fs::read(directory.path().join(&second_relative)).unwrap(),
+            [0x89, b'P', b'N', b'2']
+        );
+    }
+
+    #[test]
+    fn loads_only_relative_local_images() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let document_directory = directory.path().join("document");
+        fs::create_dir(&document_directory).expect("create document directory");
+        let document = document_directory.join("note.md");
+        let image = document_directory.join("cover.png");
+        let outside_image = directory.path().join("outside.png");
         fs::write(&document, b"![cover](cover.png)").expect("write document");
         fs::write(&image, [0x89, b'P', b'N', b'G']).expect("write image");
+        fs::write(&outside_image, [0x89, b'P', b'N', b'G']).expect("write outside image");
 
         let loaded = read_local_image(
             document.to_string_lossy().into_owned(),
@@ -588,11 +769,31 @@ mod tests {
         assert!(
             read_local_image(
                 document.to_string_lossy().into_owned(),
+                "../outside.png".to_string(),
+            )
+            .is_err()
+        );
+        #[cfg(unix)]
+        {
+            let linked_image = document_directory.join("linked.png");
+            std::os::unix::fs::symlink(&outside_image, &linked_image)
+                .expect("create image symlink");
+            assert!(
+                read_local_image(
+                    document.to_string_lossy().into_owned(),
+                    "linked.png".to_string(),
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            read_local_image(
+                document.to_string_lossy().into_owned(),
                 "missing.png".to_string(),
             )
             .is_err()
         );
-        let unsupported = directory.path().join("payload.html");
+        let unsupported = document_directory.join("payload.html");
         fs::write(&unsupported, b"not an image").expect("write unsupported image");
         assert!(
             read_local_image(
@@ -645,7 +846,10 @@ mod tests {
             "nested/target.markdown".to_string(),
         )
         .expect("resolve target");
-        assert_eq!(PathBuf::from(resolved), target.canonicalize().expect("canonical target"));
+        assert_eq!(
+            PathBuf::from(resolved),
+            target.canonicalize().expect("canonical target")
+        );
         assert!(
             resolve_markdown_link(
                 document.to_string_lossy().into_owned(),
