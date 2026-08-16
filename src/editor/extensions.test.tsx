@@ -24,8 +24,8 @@ describe("Markdown editor extensions", () => {
     expect(isAllowedLink("./next.md#section")).toBe(true);
     expect(isAllowedLink("next.md#section")).toBe(true);
     expect(isAllowedLink("#section")).toBe(true);
-    expect(isAllowedLink("../outside.md")).toBe(false);
-    expect(isAllowedLink("/absolute.md")).toBe(false);
+    expect(isAllowedLink("../outside.md")).toBe(true);
+    expect(isAllowedLink("/absolute.md")).toBe(true);
   });
 
   it.each([

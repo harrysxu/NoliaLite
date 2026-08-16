@@ -22,8 +22,9 @@ body { font: 16px/1.68 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft
 .nolia-export li { margin: 4px 0; }
 .nolia-export hr { margin: 30px 0; border: 0; border-top: 1px solid #d9dcdf; }
 .nolia-export img { display: block; max-width: 100%; height: auto; margin: 16px 0; }
-.nolia-export .tableWrapper { overflow-x: auto; margin: 18px 0; }
-.nolia-export table { border-collapse: collapse; width: max-content; min-width: 100%; table-layout: auto; }
+.nolia-export .tableWrapper { width: 100%; overflow-x: auto; margin: 18px 0; }
+.nolia-export table { border-collapse: collapse; width: 100%; min-width: 360px; table-layout: auto; }
+.nolia-export th, .nolia-export td { overflow-wrap: anywhere; }
 .nolia-export th, .nolia-export td { padding: 6px 9px; border: 1px solid #d9dcdf; text-align: left; vertical-align: top; }
 .nolia-export th { background: #f3f4f5; font-weight: 650; }
 .nolia-export .mermaid-block, .nolia-export .complex-markdown-block { margin: 22px 0; break-inside: avoid; }

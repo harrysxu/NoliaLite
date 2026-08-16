@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DocumentSession } from "../app/documentSession";
 import type { RecentFile, RecoveryDraft } from "../bridge/contracts";
 import { DecisionDialog } from "./DecisionDialog";
+import { DocumentOutline } from "./DocumentOutline";
 import { EditorErrorBoundary } from "./EditorErrorBoundary";
 import { FindBar } from "./FindBar";
 import { HistorySidebar } from "./HistorySidebar";
@@ -31,6 +32,14 @@ const session = (overrides: Partial<DocumentSession> = {}): DocumentSession => (
 });
 
 describe("application page components", () => {
+  it("renders a compact heading outline and navigates by slug", () => {
+    const onSelect = vi.fn();
+    render(<DocumentOutline markdown={"# First\n\n## Second"} onSelect={onSelect} />);
+    expect(screen.getByRole("navigation", { name: "文档大纲" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Second" }));
+    expect(onSelect).toHaveBeenCalledWith("second");
+  });
+
   it("replaces an editor render crash with an actionable error instead of a blank window", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     function BrokenEditor(): never {

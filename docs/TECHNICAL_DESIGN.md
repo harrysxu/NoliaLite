@@ -1,10 +1,10 @@
 # Nolia Lite 技术方案
 
-> 版本：0.2  
-> 状态：编辑能力边界修订  
-> 关联需求：[PRODUCT_REQUIREMENTS.md](./PRODUCT_REQUIREMENTS.md)  
-> 首期平台：macOS  
-> 参考产品：Typora（交互体验）、Nolia（已验证的 Markdown 与文件处理经验）
+> 版本：0.3
+> 状态：当前技术基线
+> 关联需求：[PRODUCT_REQUIREMENTS.md](./PRODUCT_REQUIREMENTS.md)
+> 关联测试：[TESTING.md](./TESTING.md)
+> 首期平台：macOS
 
 ## 1. 文档目的
 
@@ -26,10 +26,10 @@ Nolia Lite 使用 Tauri 2 构建 macOS 桌面应用：
 - Rust 负责文件读写、文件指纹、原子替换、草稿、最近文件、文件监听和系统对话框。
 - React + TypeScript 负责每个窗口内的单文档会话和交互状态。
 - Tiptap 3 / ProseMirror 负责所见即所得编辑、选择、输入规则和撤销栈。
-- unified / remark 只负责 Markdown 解析和受控序列化，不将 HTML 作为文档事实来源。
+- `marked` 负责保留原始顶层单元边界，`@tiptap/markdown` 负责编辑树解析和受控序列化，不将 HTML 作为文档事实来源。
 - 编辑器采用“原始源码块 + 可编辑节点”的保真模型：未修改块直接复用打开时的原始 Markdown，只有用户实际修改过的块才重新序列化。
 - Frontmatter 和无法可靠往返的语法使用局部源码节点；HTML 只经过严格清洗后渲染，任何不安全内容仍走保护路径。
-- 编辑器运行时与轻量历史应用壳分包；KaTeX 和常用语言高亮随编辑器加载，Mermaid 仅在文档包含图表时动态加载。
+- 编辑器运行时与轻量历史应用壳分包；KaTeX 和常用语言高亮随编辑器加载，图表引擎按图类型动态加载。
 - 应用不使用数据库、账号、网络请求、索引、工作区、插件运行时或窗口内多文档会话。
 
 该方案复用 Nolia 已验证的设计思想，但不直接复用其工作站架构。尤其不能直接复制 Nolia 的 Electron 壳、工作区服务、SQL 数据层、全文索引、AI、插件、图谱、多标签页或多编辑模式。
@@ -63,9 +63,9 @@ Nolia Lite 使用 Tauri 2 构建 macOS 桌面应用：
 - 自动更新服务和任何运行时网络依赖。
 - 主题市场、自定义 CSS 和复杂编辑器设置。
 
-### 3.3 参考边界
+### 3.3 实现边界
 
-- 参考 Typora 的即时排版、局部语法显现、单列画布和低干扰体验。
+- 编辑体验采用即时排版、局部语法显现、单列画布和低干扰交互。
 - 参考 Nolia 的 Tiptap 编辑规则、文件哈希冲突、原子保存、草稿和测试用例。
 - 单文档编辑能力以 Nolia 为行为基线；工作区和跨文档能力不随之迁移。
 - PRD 是最终裁决依据；本文与 PRD 冲突时，以 PRD 为准并修订本文。
@@ -98,7 +98,7 @@ macOS Finder / Menu / Drop
             |
             v
 +---------------- Tauri Runtime ----------------+
-| Single-instance + single native window        |
+| Single instance + native window registry      |
 |                                                |
 | Rust application core                         |
 |  - DocumentFileService                        |
@@ -118,7 +118,7 @@ macOS Finder / Menu / Drop
 |  - FindController                             |
 |  - transient dialogs/banners                  |
 |                                                |
-| Markdown worker                               |
+| Markdown source model                         |
 |  - parse source into source-preserving blocks |
 |  - produce ProseMirror JSON                   |
 |                                                |
@@ -146,8 +146,8 @@ Rust 不理解 Markdown 语义，只处理字节、路径和文件一致性。Ma
 
 - `@tiptap/core`、`@tiptap/react`、`@tiptap/pm`。
 - 只启用 MVP 需要的 ProseMirror schema 与扩展。
-- `unified`、`remark-parse`、`remark-gfm`、`remark-frontmatter`。
-- 自建 MDAST -> ProseMirror 和 dirty block -> Markdown 适配器。
+- `@tiptap/markdown` 负责 Markdown 与 ProseMirror JSON 的转换。
+- `marked` 负责按词法 token 切分原始顶层单元，自建源码跟踪层负责复用未修改原文。
 
 不使用整套 Markdown-to-HTML-to-Markdown 往返作为保存通道。HTML 可以用于测试渲染对照，但不能参与最终持久化。
 
@@ -161,54 +161,48 @@ Rust 不理解 Markdown 语义，只处理字节、路径和文件一致性。Ma
 
 每加入一个依赖必须回答：是否直接服务 MVP、是否引入网络、增加多少产物体积、是否可以用标准库完成。
 
-## 7. 建议目录结构
+## 7. 目录职责
 
 ```text
 src/
   app/
     App.tsx
-    AppController.ts
     documentSession.ts
-    documentCommands.ts
-  editor/
-    EditorHost.tsx
-    schema.ts
-    extensions/
-    inputRules.ts
-    findPlugin.ts
-    sourceBlocks.ts
-    markdownParser.ts
-    markdownSerializer.ts
-    markdown.worker.ts
-    protected/
-  components/
-    TitleBar.tsx
-    HistorySidebar.tsx
-    FindBar.tsx
-    SelectionToolbar.tsx
-    StatusBanner.tsx
-    dialogs/
   bridge/
-    tauriClient.ts
     contracts.ts
+    tauriClient.ts
+  components/
+    DocumentOutline.tsx
+    HistorySidebar.tsx
+    TitleBar.tsx
+    FindBar.tsx
+    StatusBanner.tsx
+    DecisionDialog.tsx
+  editor/
+    MarkdownEditor.tsx
+    sourceDocument.ts
+    extensions.tsx
+    MarkdownSyntaxEditor.ts
+    headingOutline.ts
+    MermaidBlock.tsx
+    mermaidRenderer.ts
+    mermaidMarkdown.ts
+    ComplexBlocks.tsx
+    TableToolbar.tsx
+    SelectionToolbar.tsx
+    exportDocument.ts
   styles/
     tokens.css
     app.css
     editor.css
-  test/
-    fixtures/
 
 src-tauri/
   src/
     main.rs
-    app.rs
-    commands.rs
-    document_file.rs
-    atomic_save.rs
-    draft.rs
-    recent.rs
-    watcher.rs
-    paths.rs
+    lib.rs
+    document.rs
+    storage.rs
+    pdf_export.rs
     error.rs
   capabilities/
     default.json
@@ -227,22 +221,15 @@ type DocumentSession = {
   kind: "untitled" | "file";
   filePath?: string;
   displayName: string;
-  lifecycle: "opening" | "ready" | "switching" | "closing";
-  access: "writable" | "readonly-encoding" | "readonly-permission" | "missing";
-
-  format: {
-    encoding: "utf-8";
-    bom: boolean;
-    preferredEol: "lf" | "crlf";
-  };
-
-  baseFingerprint: FileFingerprint | "new";
+  markdown: string;
+  savedMarkdown: string;
+  format: DocumentFormat;
+  baseFingerprint: FileFingerprint | { sha256: "new"; size: 0; mtimeMs: 0 };
   revision: number;
-  savedRevision: number;
-  saveState: "clean" | "dirty" | "saving" | "conflict" | "error";
-  sourceDocument: SourceDocument;
-  conflict?: ExternalConflict;
-  lastError?: UserFacingError;
+  saveState: "clean" | "dirty" | "saving" | "conflict" | "error" | "missing";
+  access: "writable" | "readonly-encoding" | "readonly-permission";
+  draftId: string;
+  externalState?: "changed" | "missing";
 };
 
 type FileFingerprint = {
@@ -287,27 +274,31 @@ Markdown -> HTML/编辑器树 -> Markdown
 
 即使用户只修改一个字，这条链路也可能统一标题、列表、空行、围栏、链接转义、表格对齐和 Frontmatter 格式，违反 PRD 的保真要求。因此 Nolia Lite 必须保留打开时的原始 Markdown 切片。
 
-### 9.2 SourceDocument
+### 9.2 顶层源码单元
 
 ```ts
-type SourceDocument = {
-  originalText: string; // 不含 BOM，保留原始换行
-  blocks: SourceBlock[];
-  parseDiagnostics: ParseDiagnostic[];
-};
-
-type SourceBlock = {
-  sourceId: string;
-  kind: SupportedBlockKind | "frontmatter" | "protected";
-  originalRange?: { from: number; to: number };
-  originalRaw?: string;
-  separatorBefore: string;
-  originalSignature?: string;
-  status: "untouched" | "dirty" | "inserted";
+type SourceUnit = {
+  raw: string;
+  kind:
+    | "editable"
+    | "mermaid"
+    | "math"
+    | "htmlPreview"
+    | "footnote"
+    | "frontmatter"
+    | "html"
+    | "unsupported";
+  markdown?: string;
 };
 ```
 
-解析器使用 MDAST 的 offset 将原文切成顶层块和块间分隔符。`originalRaw` 只属于打开时存在的块；新插入块没有原始切片。
+`marked` lexer 的 token 长度用于把原文切成顶层 `SourceUnit`。切分时建立 LF 位置到原始 CRLF 位置的映射，因此每个 `raw` 仍保留原始换行和块后分隔符。
+
+转换为 ProseMirror JSON 后，每个已有顶层节点保存三个跟踪属性：
+
+- `sourceRaw`：打开时对应的完整原始文本。
+- `sourceCanonical`：移除跟踪属性后的节点 JSON 签名。
+- `sourceIndex`：打开或重新建立基线时的顶层顺序。
 
 ### 9.3 支持分类
 
@@ -329,37 +320,36 @@ type SourceBlock = {
 ### 9.4 解析流程
 
 1. Rust 返回去除 BOM 后的 UTF-8 字符串，同时保留格式元数据和精确字节哈希。
-2. 在 AST 转换前执行保守词法预扫描：Mermaid、数学、脚注和安全 HTML 进入专用节点；Wiki Link、不安全 HTML 和未知指令进入保护路径。
-3. Web Worker 使用 remark 生成带 offset 的 MDAST。
-4. 检查每个顶层节点及其后代是否全部属于 MVP 支持集合；出现 `html` 或无法映射的节点时保护整个顶层块。
-5. 支持节点转换为 ProseMirror JSON，并写入稳定 `sourceId` 和原始签名。
-6. 不支持或不确定的节点转换为 `protectedSource` atom node，携带原始切片。
-7. 主线程一次性创建 Tiptap 编辑器；解析结果若不属于当前 `sessionId`，立即丢弃。
-8. 解析本身不得修改磁盘、最近文件以外的数据或草稿。
+2. 识别文档开头的 Frontmatter，并使用 `marked` lexer 切分剩余顶层 token。
+3. 代码围栏占位文本不会按 HTML 处理；真正的 HTML token 再执行安全预览判断。
+4. Mermaid、数学、脚注和安全 HTML 转为专用占位节点；不安全 HTML、Wiki Link 和未知指令进入保护节点。
+5. `@tiptap/markdown` 将占位后的 Markdown 解析为 ProseMirror JSON。
+6. 当节点数与源码单元数一致时，按顺序写入 `sourceRaw`、`sourceCanonical` 和 `sourceIndex`。
+7. 使用 ProseMirror `fixTables` 修复加载后的表格结构，再重建源码跟踪基线，初始化修复不产生用户编辑。
+8. 使用完成基线化的 JSON 创建 Tiptap 编辑器；解析过程不写磁盘或草稿。
 
 预扫描采用“宁可多保护，不可误转换”的策略。没有被扩展解析器识别的普通字符仍按文本显示；只要转换器不能证明一个块可以无损表达，就不把它放入常规编辑 schema。
 
-### 9.5 编辑与脏块识别
+### 9.5 编辑与变更识别
 
-- ProseMirror transaction 只要改变内容或 markup，就定位受影响的顶层节点。
-- 被修改的原始节点标记为 `dirty`；新节点标记为 `inserted`。
-- 列表、引用、表格作为一个顶层保存单元，内部任意编辑都会使整个单元变脏。
-- 相邻块合并、拆分或重排时，涉及边界的所有块都标记为脏。
+- 编辑器更新时移除跟踪属性并计算当前顶层节点的 canonical JSON。
+- canonical 签名和顶层顺序都未变化时，该节点仍可直接复用 `sourceRaw`。
+- 内容、markup 或顺序发生变化的节点由 Markdown manager 单独序列化。
+- 新节点没有跟踪属性，始终按当前会话的换行风格生成 Markdown。
 - 仅选择变化、查找装饰、滚动和焦点变化不增加 revision。
 - IME composition 期间不序列化、不触发自动保存；在 `compositionend` 后合并为一次有效编辑。
-- Undo 恢复到原始签名时，节点重新使用 `originalRaw`，并可回到 clean。
+- Undo 恢复到保存基线时，会话 Markdown 与 `savedMarkdown` 相等并回到 clean。
 
 ### 9.6 保存组合算法
 
 保存前按编辑器当前顶层节点顺序组合 Markdown：
 
-1. 节点仍有原 `sourceId` 且签名等于原始签名时，直接使用 `originalRaw`。
-2. 节点为 `protectedSource` 时，使用其局部源码值，不经过 Markdown serializer。
-3. 其他节点只序列化该顶层块。
-4. 两个原始相邻块仍保持原顺序且边界未修改时，复用原始分隔符。
-5. 新增、删除、移动或合并产生的新边界使用会话首选换行，块间默认两个换行。
-6. 修改块内部使用会话首选 LF/CRLF；未修改切片保留原来的具体字节形式。
-7. BOM 由 Rust 在写入字节时恢复，不进入编辑器文本。
+1. 节点具有 `sourceRaw`，canonical 签名相同且 `sourceIndex` 等于当前顺序时，直接复用原始文本。
+2. 其他节点移除跟踪属性后，由 `@tiptap/markdown` 单节点序列化。
+3. 新生成内容统一为会话首选 LF/CRLF，并移除序列化器额外添加的尾部空白。
+4. 原节点末尾已有两个及以上换行时复用该分隔符；否则在非末尾节点后生成两个首选换行。
+5. 原末尾节点是否带换行保持不变；新增末尾节点不强制增加换行。
+6. BOM 由 Rust 写入字节时恢复，不进入编辑器文本。
 
 该算法保证：只打开和关闭时零写入；只修改一个段落时，其他块、Frontmatter 和未知语法保持原样。
 
@@ -437,21 +427,22 @@ type SourceBlock = {
 
 #### 链接
 
-- `href` 的 Markdown 原字符串属于文档内容；相对链接不得被解析成绝对路径后写回，也不得被自动 URL 规范化。
-- 普通点击直接向应用发送 `{ href, newWindow: false }`；锚点在当前编辑器内跳转，相对 Markdown 路径经 Rust 校验后替换当前文档。
-- `Command/Ctrl+Click` 发送 `{ href, newWindow: true }`；相对 Markdown 路径经 Rust 校验后创建独立原生窗口。
+- `href` 的 Markdown 原字符串属于文档内容；解析结果不得写回源码，也不得被自动 URL 规范化。
+- 普通点击直接向应用发送 `{ href, newWindow: false }`；锚点在当前编辑器内跳转，本地 Markdown 路径经 Rust 校验后替换当前文档。
+- `Command/Ctrl+Click` 发送 `{ href, newWindow: true }`；本地 Markdown 路径经 Rust 校验后创建独立原生窗口。
+- 本地文档支持相对、父目录和绝对路径；无扩展名路径按 `.md`、`.markdown` 顺序解析。空路径、NUL、无效盘符、非 Markdown、缺失和非文件目标被拒绝。
 - 外部协议由 opener 交给系统默认应用，WebView 不请求目标 URL。
 - 新建或编辑链接统一使用 `Command/Ctrl+K` 的“文本 + 链接”两字段表单。
 
 #### 图片
 
-- Markdown 中始终保留相对路径字符串。
-- 前端请求 Rust 读取当前文档相对路径对应的本地图片，返回内存字节并生成短期 blob URL。
-- 不把绝对路径写回 Markdown。
+- Markdown 中始终保留用户输入的图片路径字符串。
+- 前端请求 Rust 读取相对、父目录或绝对路径对应的本地图片，返回内存字节并生成短期 blob URL。
+- 路径解析结果不写回 Markdown。
 - 选择或拖入图片时，Rust 原子复制到文档同级 `assets/`，同名不同内容自动编号；相同内容复用既有文件。
 - 粘贴图片时，前端把剪贴板字节交给 Rust 写入 `assets/`，再插入相对 Markdown 路径。
 - `http:` / `https:` 图片不加载，只显示带 alt/path 的占位内容。
-- 图片不存在、越权或格式不支持时显示稳定占位，不影响保存。
+- 图片不存在、不是文件、超过大小上限或格式不支持时显示稳定占位，不影响保存。
 - 原始 HTML、SVG 脚本和嵌入内容不执行。
 
 ### 9.10 撤销、重做与查找
@@ -731,15 +722,15 @@ base-uri 'none';
 | 空闲内存 | <= 120MB | 单 WebView、单编辑器、无索引/数据库 |
 | 自动保存等待 | 约 800ms | 组合 + IPC 不阻塞下一次输入 |
 | 输入响应 | p95 <= 16ms | transaction 路径不做整篇解析/序列化 |
-| 2MB/10,000 行打开 | 可编辑且滚动流畅 | Worker 解析，避免 React 按块维护镜像状态 |
+| 2MB/10,000 行打开 | 可编辑且滚动流畅 | 打开时一次解析，输入事务不重复解析原始 Markdown |
 
 ### 15.2 手段
 
 - 历史状态不加载 Tiptap 和编辑器主包；第一次创建/打开文档时动态加载。
-- 全量 Markdown 解析放入 Web Worker。
+- 全量 Markdown 解析只发生在打开、重新载入或切换全文源码后。
 - 输入 transaction 只标记受影响的顶层块，不重建 React tree。
 - 自动保存只序列化 dirty blocks。
-- 文档内容不复制进多个全局 store；编辑器和 SourceDocument 各持有必要数据。
+- 文档内容不复制进多个全局 store；会话与编辑器只持有各自所需状态。
 - 图片按可见/请求加载，使用 blob URL，并在节点卸载或切换文档时 revoke。
 - 编辑器整体在打开文档时加载；Mermaid 只在文档实际包含图表节点时动态加载，不能反向进入普通编辑器 chunk。
 - 大文档优化以实测为准；若使用 `content-visibility`，必须先验证选择、查找和中文输入法，不以破坏编辑正确性换取指标。
@@ -769,77 +760,17 @@ base-uri 'none';
 - 可操作错误通过状态条或模态决策界面呈现；普通成功不弹 toast。
 - 技术细节可折叠显示，但不得包含文档内容。
 
-## 17. 测试方案
+## 17. 测试约束
 
-### 17.1 Rust 单元与集成测试
+自动化范围、原生验收清单、当前结果和发布门禁统一维护在 [测试与发布](./TESTING.md)，本文件不重复保存执行批次或历史报告。
 
-- UTF-8、无效 UTF-8、BOM 检测。
-- LF、CRLF 和混合换行检测。
-- 精确字节 SHA-256。
-- 正常原子保存、保存中断、权限错误。
-- stale base conflict、文件删除、另存为和明确覆盖。
-- 临时文件权限和清理范围。
-- 草稿原子写入、读取、版本迁移和删除。
-- 最近文件上限、去重和损坏 JSON 恢复。
-- watcher 自身保存去重、外部修改和删除事件。
-
-### 17.2 Markdown 单元测试
-
-建立 golden corpus，至少覆盖：
-
-- 所有 MVP Markdown 节点及嵌套组合。
-- 中文、emoji、组合字符和长行。
-- BOM、LF、CRLF、末尾无换行。
-- Frontmatter 注释、复杂 YAML 和空 Frontmatter。
-- 原始 HTML、未知指令、数学、Mermaid、脚注及其合法/非法边界样例。
-- 相对链接、包含空格/中文/转义字符的图片路径。
-- 代码围栏中包含反引号。
-- GFM 表格对齐、转义管道和空单元格。
-
-关键断言：
+技术实现必须保证：
 
 1. `open -> compose` 与原文本逐字相等。
-2. 未修改 Frontmatter 和 protected block 逐字相等。
-3. 修改一个块后，其他块的切片逐字相等。
+2. 未修改 Frontmatter、未知语法和未修改块逐字保留。
+3. 修改一个块不会重写其他块。
 4. 解析失败不能导致内容减少。
-5. 所有编辑器节点都有明确 serializer 或保护降级路径。
-
-### 17.3 状态机测试
-
-- 保存中继续编辑。
-- 保存响应晚于文档切换。
-- 自动保存和 Command+S 同时触发。
-- 外部修改发生在编辑前、编辑中和保存前。
-- dirty 文档关闭、新建、打开和 Finder 二次打开。
-- 草稿与磁盘基线一致/冲突。
-- Undo 回到保存基线后恢复 clean。
-
-### 17.4 UI 测试
-
-Web 前端使用 Playwright + mock Tauri bridge：
-
-- 历史侧栏、新建、打开、删除/清空历史、保存状态。
-- Markdown 输入规则和格式快捷键。
-- 查找、浮动工具条、链接和表格完整编辑动作。
-- Mermaid 渲染、局部源码、修饰键查看、缩放、导出、错误和复制语义。
-- 公式、脚注、安全 HTML、代码语言和图片源码交互。
-- 冲突、只读、文件删除、保存失败和恢复流程。
-- 空窗口复用、多文件拖放分窗、重复路径聚焦和逐窗口关闭/退出 guard。
-- 560x480、常规桌面尺寸、浅色和深色截图。
-- 键盘可达性、焦点顺序、ARIA 名称和对比度。
-- HTML 快照移除编辑控件并保留表格、公式、Mermaid、本地图片和受保护源码；PDF 输出隐藏应用外壳、浮层和选择状态，并验证真实产物。
-
-Tauri 原生行为使用 Rust 集成测试和 macOS release smoke checklist；不能用浏览器 mock 代替 Finder 文件关联、系统菜单、关闭拦截和原子保存验收。
-
-### 17.5 验收测试
-
-每个发布候选必须执行 PRD 第 11 节全部 10 条验收标准，并记录：
-
-- 原文件修改前后哈希与 mtime。
-- 外部冲突测试结果。
-- 异常退出草稿恢复结果。
-- 断网或网络拦截下的请求记录。
-- 启动、包体、内存和大文档性能数据。
+5. 原生行为必须由 release 应用验收，不能只依赖 WebView mock。
 
 ## 18. 需求追踪
 
@@ -855,62 +786,13 @@ Tauri 原生行为使用 Rust 集成测试和 macOS release smoke checklist；�
 | F-08 最近文件 | versioned JSON, max 5 | 去重、不扫描、失效路径 |
 | F-09 外部修改 | watcher + base hash | change/delete/save conflict |
 | F-10 窗口状态 | per-window reducer + registry + sequential quit guard | 多窗口 dirty/error/conflict 关闭与退出 |
+| F-11 Mermaid 图表 | MermaidBlock + diagram renderer + viewer | 渲染、源码、查看、缩放、复制和导出 |
+| F-12 复杂块编辑 | ComplexBlocks + TableToolbar + code controls | 表格、代码、图片、公式、脚注和 HTML 交互 |
+| F-13 Markdown 保真 | sourceDocument tracking attributes | 未修改节点、换行、BOM 与受保护语法往返 |
 | F-14 文档导出 | rendered snapshot + atomic HTML write + native WebView PDF output | 独立 HTML、扩展名校验、PDF 文件头/原子替换、原生产物、源文件零写入 |
+| F-15 文档大纲 | headingOutline + DocumentOutline | H1-H6 提取、缩进、跳转和零编辑事务 |
 
-## 19. 实施阶段
-
-### 阶段 1：壳与文件闭环
-
-- 建立 Tauri 多窗口注册表、每窗口单会话 React 壳、定向原生菜单和 typed bridge。
-- 实现新建、选择打开、Finder 打开、拖放、读取和另存为。
-- 实现 UTF-8/BOM/EOL/哈希和最小标题栏状态。
-- 用纯文本临时编辑面验证文件闭环，不作为最终 UI。
-
-退出条件：外部文件能安全打开/保存，未修改关闭零写入。
-
-### 阶段 2：保真编辑核心
-
-- 实现 SourceDocument、remark worker、最小 ProseMirror schema。
-- 实现基础块、行内格式、列表、引用和代码。
-- 实现 dirty block serializer 和 protected source。
-- 建立 round-trip golden corpus。
-
-退出条件：编辑单块不会改写其他块，未知语法不丢失。
-
-### 阶段 3：MVP Markdown 完整性
-
-- 任务列表、链接、本地图片、GFM 表格、Frontmatter。
-- 输入规则、浮动工具条、查找、撤销重做。
-- 中文输入法和剪贴板边界。
-
-退出条件：PRD Markdown 验收覆盖通过。
-
-### 阶段 3.5：Nolia 编辑能力对齐
-
-- Mermaid 渲染、局部源码与查看器完整动作。
-- 表格插入、结构操作、对齐、调整尺寸、右键菜单与源码编辑。
-- KaTeX、脚注、安全 HTML、代码高亮、图片和链接局部源码动作。
-- 为复杂块建立交互、复制粘贴、错误和 Markdown 往返测试。
-
-退出条件：同一 Markdown 样例在 Nolia 与 Lite 的渲染结果和用户动作一致；差异只能来自应用外壳。
-
-### 阶段 4：可靠保存与恢复
-
-- 800ms 自动保存、250ms 草稿。
-- 文件监听、冲突、删除、只读和编码状态。
-- 关闭/切换 guard、最近文件和恢复 UI。
-
-退出条件：冲突与异常退出测试通过，任何失败不丢内容。
-
-### 阶段 5：质量与发布
-
-- 完成视觉、深色模式、可访问性和最小尺寸。
-- 性能、网络、包体和内存验收。
-- macOS 文件关联、签名、公证和 release smoke。
-
-退出条件：PRD 10 条 MVP 验收全部通过。
-
-## 20. 主要风险与控制
+## 19. 主要风险与控制
 
 | 风险 | 影响 | 控制措施 |
 |---|---|---|
@@ -919,20 +801,20 @@ Tauri 原生行为使用 Rust 集成测试和 macOS release smoke checklist；�
 | 保存与继续输入发生竞态 | 错误显示 clean 或漏存 | sessionId + revision + 单在途保存 |
 | 文件监听误判自身写入 | 无意义冲突 | 保存返回指纹去重，保存前哈希仍是最终门禁 |
 | 原子替换改变权限或失败 | 文件不可用 | 同目录临时文件、权限复制、sync、失败保留草稿 |
-| 大文档使 WebView 卡顿 | 不达性能目标 | Worker 解析、块级增量、延迟加载、固定基准 |
+| 大文档使 WebView 卡顿 | 不达性能目标 | 顶层源码复用、按需加载、固定基准与原生性能签收 |
 | 复杂渲染器使启动和包体膨胀 | Lite 逐渐变重 | 动态 import、独立 vendor chunk、普通文档不加载 |
 | Nolia 与 Lite 编辑手势分叉 | 用户预期和测试重复 | 以 Nolia 交互测试为契约，抽取/移植同一行为 |
 | UI 逐渐引入工作站能力 | 产品边界失守 | 新功能必须通过 PRD 第 12 节门槛 |
 
-## 21. 完成定义
+## 20. 完成定义
 
 技术实现只有同时满足以下条件才算完成：
 
-1. PRD 的 MVP 功能和 10 条验收标准全部通过。
+1. PRD 的 MVP 功能和 15 条验收标准全部通过。
 2. 打开并无修改关闭不会写文件。
 3. 未修改块、Frontmatter 和未知语法有逐字保真测试。
 4. 所有保存路径都执行基线哈希检查和安全替换。
 5. 所有失败路径都保留内存内容或恢复草稿。
 6. 运行期间默认零网络请求。
 7. release 构建达到启动、包体、内存和大文档目标。
-8. 文档模式不存在侧栏、标签页、源码/预览切换、AI、插件或工作区入口；无文档时只显示单层历史侧栏，多文档只通过独立原生窗口呈现。
+8. 文档模式只允许当前文档大纲，不存在文件树、属性侧栏、标签页、源码/预览分屏、AI、插件或工作区入口；无文档时只显示单层历史侧栏，多文档只通过独立原生窗口呈现。

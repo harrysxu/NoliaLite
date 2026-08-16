@@ -10,7 +10,7 @@ import { createEditorExtensions } from "./extensions";
 import { parseTrackedMarkdown } from "./sourceDocument";
 
 vi.mock("./mermaidRenderer", () => ({
-  renderMermaidSvg: vi.fn(async (source: string) => {
+  renderDiagramSvg: vi.fn(async (source: string) => {
     if (source.includes("INVALID")) throw new Error("Parse error");
     return '<svg viewBox="0 0 100 80"><text>diagram</text></svg>';
   })
@@ -39,9 +39,14 @@ describe("Mermaid block interactions", () => {
     const block = await screen.findByRole("group", { name: "Mermaid 图表" });
     await waitFor(() => expect(block.querySelector("svg")).toBeTruthy());
     fireEvent.click(block);
+    const language = screen.getByRole("textbox", { name: "图表语言" });
     const source = screen.getByRole("textbox", { name: "Mermaid 图表源码" });
-    fireEvent.change(source, { target: { value: "```mermaid\ngraph TD\n  A --> C\n```" } });
+    expect((language as HTMLInputElement).value).toBe("mermaid");
+    expect((source as HTMLTextAreaElement).value).toBe("graph TD\n  A --> B");
+    fireEvent.change(source, { target: { value: "graph TD\n  A --> C" } });
     expect(editor.state.doc.firstChild?.attrs.markdown).toContain("A --> C");
+    fireEvent.change(language, { target: { value: "flow" } });
+    expect(editor.state.doc.firstChild?.attrs.markdown).toContain("```flow");
     fireEvent.keyDown(source, { key: "Escape" });
     expect(screen.queryByRole("textbox", { name: "Mermaid 图表源码" })).toBeNull();
   });

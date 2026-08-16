@@ -1,4 +1,4 @@
-import { Extension, type Editor, type JSONContent } from "@tiptap/core";
+import { Extension, getSchema, type Editor, type JSONContent } from "@tiptap/core";
 import { MarkdownManager } from "@tiptap/markdown";
 import { NodeSelection, Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
@@ -10,11 +10,20 @@ import { importDocumentImage, pickImageFiles } from "../bridge/tauriClient";
 import { CodeLanguageControl, copyText } from "./CodeLanguageControl";
 import { DiagramViewer, type DiagramViewerContent } from "./DiagramViewer";
 import { createEditorExtensions, isAllowedLink } from "./extensions";
-import { SelectionToolbar } from "./SelectionToolbar";
-import { parseTrackedMarkdown, serializeTrackedMarkdown } from "./sourceDocument";
+import {
+  applyLinkMarkdownSource,
+  applyMarkdownSyntaxSource,
+  clearMarkdownSyntaxEditor,
+  isMarkdownSyntaxEditorActive,
+  MarkdownSyntaxEditor,
+  openLinkMarkdownEditorAtPosition,
+  openMarkdownSyntaxEditorAtPosition
+} from "./MarkdownSyntaxEditor";
+import { normalizeTrackedTables, parseTrackedMarkdown, serializeTrackedMarkdown } from "./sourceDocument";
 import { SourceEditor, type SourceEditorHandle } from "./SourceEditor";
 import { TableInsertDialog, TableToolbar } from "./TableToolbar";
 import { snapshotEditorHtml } from "./exportDocument";
+import { normalizeHeadingReference, slugifyHeading } from "./headingOutline";
 
 export type FindResult = { current: number; total: number };
 
@@ -161,25 +170,6 @@ function selectMatch(editor: Editor, query: string, direction: "next" | "previou
   return { current: index + 1, total: matches.length };
 }
 
-function normalizeHeadingReference(value: string): string {
-  let decoded = value;
-  try {
-    decoded = decodeURIComponent(value);
-  } catch {
-    // Keep the literal fragment when it is not valid percent-encoding.
-  }
-  return decoded.trim().toLocaleLowerCase().replace(/^#/, "");
-}
-
-function slugifyHeading(value: string): string {
-  return value
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]/gu, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-");
-}
-
 function jumpToHeading(editor: Editor, reference: string): boolean {
   const normalized = normalizeHeadingReference(reference);
   if (!normalized) return false;
@@ -199,9 +189,11 @@ function jumpToHeading(editor: Editor, reference: string): boolean {
   if (headingPosition === undefined) return false;
   const element = editor.view.nodeDOM(headingPosition);
   if (element instanceof HTMLElement) element.scrollIntoView({ block: "center" });
-  editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, headingPosition + 1)).scrollIntoView());
-  editor.view.focus();
   return true;
+}
+
+function parseEditorMarkdown(markdown: string, manager: MarkdownManager, schema: Editor["schema"]): JSONContent {
+  return normalizeTrackedTables(parseTrackedMarkdown(markdown, manager), schema);
 }
 
 async function waitForExportAssets(root: HTMLElement): Promise<void> {
@@ -230,16 +222,37 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   const [diagramViewer, setDiagramViewer] = useState<DiagramViewerContent>();
   const [tableInsertOpen, setTableInsertOpen] = useState(false);
   const sourceEditorRef = useRef<SourceEditorHandle>(null);
+  const editorInstanceRef = useRef<Editor | null>(null);
   const extensions = useMemo(
-    () => [...createEditorExtensions(filePath, setDiagramViewer, editable, onError), FindHighlights],
+    () => [
+      ...createEditorExtensions(filePath, setDiagramViewer, editable, onError),
+      MarkdownSyntaxEditor.configure({
+        onSubmit: (source, markdown) => {
+          const currentEditor = editorInstanceRef.current;
+          if (!currentEditor) return false;
+          const applied = source.kind === "link"
+            ? applyLinkMarkdownSource(currentEditor, source, markdown)
+            : applyMarkdownSyntaxSource(currentEditor, source, markdown);
+          if (applied) clearMarkdownSyntaxEditor(currentEditor.view);
+          return applied;
+        },
+        onCancel: () => {
+          const currentEditor = editorInstanceRef.current;
+          if (!currentEditor) return;
+          clearMarkdownSyntaxEditor(currentEditor.view);
+          currentEditor.view.focus();
+        }
+      }),
+      FindHighlights
+    ],
     [editable, filePath, onError]
   );
+  const schema = useMemo(() => getSchema(extensions), [extensions]);
   const initialValueRef = useRef(value);
   const initialContent = useMemo<JSONContent>(() => {
     const manager = new MarkdownManager({ extensions });
-    return parseTrackedMarkdown(initialValueRef.current, manager);
-  }, [extensions]);
-  const [toolbarPosition, setToolbarPosition] = useState<{ left: number; top: number }>();
+    return parseEditorMarkdown(initialValueRef.current, manager, schema);
+  }, [extensions, schema]);
   const [linkEditor, setLinkEditor] = useState<LinkEditorState>();
   const linkInputRef = useRef<HTMLInputElement>(null);
 
@@ -257,49 +270,84 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         "aria-label": "Markdown 文档",
         spellcheck: "true"
       },
-      handleDOMEvents: {
-        click: (view, event) => {
-          const mouseEvent = event as MouseEvent;
-          const eventTarget = mouseEvent.target instanceof Element ? mouseEvent.target : undefined;
-          const hitTarget = typeof document.elementFromPoint === "function"
-            ? document.elementFromPoint(mouseEvent.clientX, mouseEvent.clientY)
-            : undefined;
-          const target = hitTarget instanceof Element && view.dom.contains(hitTarget) ? hitTarget : eventTarget;
-          const anchor = target?.closest<HTMLAnchorElement>("a[href]");
-          const href = anchor?.getAttribute("href");
-          if (!anchor || !href) return false;
-          mouseEvent.preventDefault();
-          onOpenLink?.(href, { newWindow: mouseEvent.metaKey || mouseEvent.ctrlKey });
+      handleClick: (view, position, event) => {
+        const eventTarget = event.target instanceof Element ? event.target : undefined;
+        const hitTarget = typeof document.elementFromPoint === "function"
+          ? document.elementFromPoint(event.clientX, event.clientY)
+          : undefined;
+        const target = hitTarget instanceof Element && view.dom.contains(hitTarget) ? hitTarget : eventTarget;
+        const anchor = target?.closest<HTMLAnchorElement>("a[href]");
+        const href = anchor?.getAttribute("href");
+        if (anchor && href) {
+          event.preventDefault();
+          if (event.metaKey || event.ctrlKey) {
+            clearMarkdownSyntaxEditor(view);
+            onOpenLink?.(href, { newWindow: true });
+            return true;
+          }
+          if (!view.editable) {
+            onOpenLink?.(href, { newWindow: false });
+            return true;
+          }
+          setLinkEditor(undefined);
+          const currentEditor = editorInstanceRef.current;
+          return currentEditor ? openLinkMarkdownEditorAtPosition(currentEditor, position, anchor) : true;
+        }
+        if (target?.closest("ul[data-type='taskList'] li > label")) return false;
+        if (isMarkdownSyntaxEditorActive(view)) return true;
+        const currentEditor = editorInstanceRef.current;
+        if (currentEditor && openMarkdownSyntaxEditorAtPosition(currentEditor, position, target, event)) {
+          event.preventDefault();
           return true;
         }
+        clearMarkdownSyntaxEditor(view);
+        return false;
       }
     },
     onUpdate: ({ editor: currentEditor }) => {
       if (!currentEditor.markdown) return;
       onChange(serializeTrackedMarkdown(currentEditor.getJSON(), currentEditor.markdown, preferredEol));
-    },
-    onSelectionUpdate: ({ editor: currentEditor }) => {
-      const { from, to } = currentEditor.state.selection;
-      if (from === to || !currentEditor.isEditable || !currentEditor.isFocused) {
-        setToolbarPosition(undefined);
-        return;
-      }
-      requestAnimationFrame(() => {
-        const start = currentEditor.view.coordsAtPos(from);
-        const end = currentEditor.view.coordsAtPos(to);
-        setToolbarPosition({
-          left: Math.max(12, (start.left + end.right) / 2),
-          top: Math.max(52, Math.min(start.top, end.top) - 10)
-        });
-      });
-    },
-    onBlur: ({ event }) => {
-      const target = event.relatedTarget;
-      if (!(target instanceof Element) || !target.closest(".selection-toolbar")) {
-        setToolbarPosition(undefined);
-      }
     }
   });
+
+  editorInstanceRef.current = editor;
+
+  useEffect(() => {
+    if (!editor) return;
+    const openLocalMarkdown = (event: MouseEvent) => {
+      const eventTarget = event.target instanceof Element ? event.target : undefined;
+      const hitTarget = typeof document.elementFromPoint === "function"
+        ? document.elementFromPoint(event.clientX, event.clientY)
+        : undefined;
+      const target = hitTarget instanceof Element && editor.view.dom.contains(hitTarget) ? hitTarget : eventTarget;
+      if (isMarkdownSyntaxEditorActive(editor.view) && !target?.closest(".markdown-inline-session")) return;
+      const anchor = target?.closest<HTMLAnchorElement>("a[href]");
+      if (event.button === 0 && anchor && !event.metaKey && !event.ctrlKey) {
+        const pointerPosition = editor.view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos
+          ?? editor.state.selection.from;
+        setLinkEditor(undefined);
+        if (openLinkMarkdownEditorAtPosition(editor, pointerPosition, anchor)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
+      if (
+        event.button !== 0
+        || !target
+        || target.closest("a[href], .markdown-inline-session")
+        || target.closest("ul[data-type='taskList'] li > label")
+        || !target.closest("h1, h2, h3, h4, h5, h6, blockquote, li, strong, b, em, i, s, del, code:not(pre code)")
+      ) return;
+      const pointerPosition = editor.view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos
+        ?? editor.state.selection.from;
+      if (!openMarkdownSyntaxEditorAtPosition(editor, pointerPosition, target, event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    editor.view.dom.addEventListener("mousedown", openLocalMarkdown, true);
+    return () => editor.view.dom.removeEventListener("mousedown", openLocalMarkdown, true);
+  }, [editor]);
 
   useEffect(() => {
     if (linkEditor) linkInputRef.current?.focus();
@@ -307,6 +355,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
 
   const openLinkEditor = () => {
     if (!editor?.isEditable) return;
+    clearMarkdownSyntaxEditor(editor.view);
     if (editor.isActive("link")) editor.commands.extendMarkRange("link");
     const { from, to } = editor.state.selection;
     const start = editor.view.coordsAtPos(from);
@@ -346,7 +395,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
 
   const exitSourceMode = () => {
     if (editor?.markdown) {
-      editor.commands.setContent(parseTrackedMarkdown(sourceValue, editor.markdown), { emitUpdate: false });
+      editor.commands.setContent(parseEditorMarkdown(sourceValue, editor.markdown, editor.schema), { emitUpdate: false });
     }
     setSourceMode(false);
     requestAnimationFrame(() => editor?.commands.focus());
@@ -355,7 +404,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   const changeSource = (next: string) => {
     setSourceValue(next);
     if (editor?.markdown) {
-      editor.commands.setContent(parseTrackedMarkdown(next, editor.markdown), { emitUpdate: false });
+      editor.commands.setContent(parseEditorMarkdown(next, editor.markdown, editor.schema), { emitUpdate: false });
     }
     onChange(next);
   };
@@ -389,6 +438,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         return;
       }
       const current = editor ? serializeTrackedMarkdown(editor.getJSON(), editor.markdown!, preferredEol) : value;
+      if (editor) clearMarkdownSyntaxEditor(editor.view);
       setSourceValue(current);
       setSourceMode(true);
     },
@@ -476,7 +526,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
       ) : null}
       <div className="rendered-editor" hidden={sourceMode}>
         <EditorContent editor={editor} />
-        <SelectionToolbar editor={editor} position={toolbarPosition} onEditLink={openLinkEditor} />
         <TableToolbar editor={editor} />
         <CodeLanguageControl editor={editor} />
         <TableInsertDialog

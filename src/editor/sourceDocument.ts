@@ -1,5 +1,8 @@
 import type { JSONContent } from "@tiptap/core";
 import type { MarkdownManager } from "@tiptap/markdown";
+import type { Schema } from "@tiptap/pm/model";
+import { EditorState } from "@tiptap/pm/state";
+import { fixTables } from "@tiptap/pm/tables";
 import { marked, type Token } from "marked";
 
 import type { PreferredEol } from "../bridge/contracts";
@@ -23,10 +26,10 @@ type PreparedDocument = {
 const frontmatterPattern = /^---(?:\r?\n)[\s\S]*?(?:\r?\n)---[ \t]*(?=\r?\n|$)/;
 const unsafeInlinePattern = /\[\[[^\]]+]]|\$\$|\\\(|\\\)|\\\[|\\\]|(^|\n)\s*:::/m;
 const referenceLinkPattern = /\[[^\]\n]+]\[[^\]\n]*]/;
-const htmlPattern = /<\/?[A-Za-z][^>]*>/;
-
 function isProtectedToken(token: Token): ProtectedKind | undefined {
-  if (token.type === "html" || htmlPattern.test(token.raw)) return "html";
+  // Marked already classifies raw HTML as an `html` token. Inspecting every
+  // token's raw text would misclassify code placeholders such as `<API_KEY>`.
+  if (token.type === "html") return "html";
   if (token.type === "def" || unsafeInlinePattern.test(token.raw) || referenceLinkPattern.test(token.raw)) {
     return "unsupported";
   }
@@ -151,6 +154,30 @@ export function parseTrackedMarkdown(markdown: string, manager: MarkdownManager)
     return { ...node, attrs };
   });
   return parsed;
+}
+
+export function rebaseTrackedDocument(doc: JSONContent): JSONContent {
+  if (!doc.content) return doc;
+  return {
+    ...doc,
+    content: doc.content.map((node, index) => {
+      if (typeof node.attrs?.sourceRaw !== "string") return node;
+      return {
+        ...node,
+        attrs: {
+          ...node.attrs,
+          sourceCanonical: canonicalNode(node),
+          sourceIndex: index
+        }
+      };
+    })
+  };
+}
+
+export function normalizeTrackedTables(doc: JSONContent, schema: Schema): JSONContent {
+  const documentNode = schema.nodeFromJSON(doc);
+  const repair = fixTables(EditorState.create({ schema, doc: documentNode }));
+  return rebaseTrackedDocument((repair?.doc ?? documentNode).toJSON());
 }
 
 function preferredLineEnding(eol: PreferredEol): string {

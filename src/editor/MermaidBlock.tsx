@@ -11,8 +11,8 @@ import {
 } from "react";
 
 import { decodeProtectedRaw } from "./sourceDocument";
-import { mermaidSourceFromMarkdown } from "./mermaidMarkdown";
-import { renderMermaidSvg } from "./mermaidRenderer";
+import { diagramMarkdownParts, updateDiagramMarkdown } from "./mermaidMarkdown";
+import { renderDiagramSvg } from "./mermaidRenderer";
 import type { DiagramViewerContent } from "./DiagramViewer";
 
 export type { DiagramViewerContent } from "./DiagramViewer";
@@ -82,6 +82,7 @@ function MermaidBlockView({
   onOpenDiagram
 }: NodeViewProps & { onOpenDiagram?: (content: DiagramViewerContent) => void }) {
   const markdown = String(node.attrs.markdown ?? "");
+  const source = diagramMarkdownParts(markdown);
   const [editing, setEditing] = useState(false);
   const [svg, setSvg] = useState<string>();
   const [error, setError] = useState<string>();
@@ -92,7 +93,7 @@ function MermaidBlockView({
     let active = true;
     setRendering(true);
     setError(undefined);
-    void renderMermaidSvg(mermaidSourceFromMarkdown(markdown))
+    void renderDiagramSvg(markdown)
       .then((value) => {
         if (!active) return;
         setSvg(value);
@@ -144,19 +145,19 @@ function MermaidBlockView({
       aria-label="Mermaid 图表"
       aria-keyshortcuts="Enter Control+Click Meta+Click"
       onMouseDown={(event: MouseEvent<HTMLDivElement>) => {
-        if (event.target === textareaRef.current) return;
+        if (event.target instanceof Element && event.target.closest(".mermaid-block-editor")) return;
         event.preventDefault();
         event.stopPropagation();
       }}
       onClick={(event: MouseEvent<HTMLDivElement>) => {
-        if (event.target === textareaRef.current) return;
+        if (event.target instanceof Element && event.target.closest(".mermaid-block-editor")) return;
         event.preventDefault();
         event.stopPropagation();
         if (event.metaKey || event.ctrlKey) openViewer();
         else if (editor.isEditable) enterEditing();
       }}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.target === textareaRef.current) return;
+        if (event.target instanceof Element && event.target.closest(".mermaid-block-editor")) return;
         if (event.key === "Enter" && editor.isEditable) {
           event.preventDefault();
           event.stopPropagation();
@@ -174,25 +175,44 @@ function MermaidBlockView({
       }}
     >
       {editing ? (
-        <textarea
-          ref={textareaRef}
-          className="mermaid-block-source"
-          aria-label="Mermaid 图表源码"
-          value={markdown}
-          rows={Math.min(20, Math.max(5, markdown.split(/\r?\n/).length + 1))}
-          spellCheck={false}
-          onChange={(event) => updateAttributes({ markdown: event.currentTarget.value })}
-          onClick={(event) => event.stopPropagation()}
-          onMouseDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setEditing(false);
-              editor.commands.focus();
-            }
-          }}
-        />
+        <div className="mermaid-block-editor">
+          <input
+            className="mermaid-block-language"
+            aria-label="图表语言"
+            value={source.language}
+            spellCheck={false}
+            onChange={(event) => updateAttributes({
+              markdown: updateDiagramMarkdown(markdown, event.currentTarget.value, source.body)
+            })}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setEditing(false);
+                editor.commands.focus();
+              }
+            }}
+          />
+          <textarea
+            ref={textareaRef}
+            className="mermaid-block-source"
+            aria-label="Mermaid 图表源码"
+            value={source.body}
+            rows={Math.min(20, Math.max(5, source.body.split(/\r?\n/).length + 1))}
+            spellCheck={false}
+            onChange={(event) => updateAttributes({
+              markdown: updateDiagramMarkdown(markdown, source.language, event.currentTarget.value)
+            })}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setEditing(false);
+                editor.commands.focus();
+              }
+            }}
+          />
+        </div>
       ) : null}
       <div className="mermaid-block-preview" aria-live="polite">
         {rendering && !svg ? (

@@ -402,33 +402,25 @@ pub fn store_document_image(
 #[tauri::command]
 pub fn read_local_image(document_path: String, image_source: String) -> Result<String, ApiError> {
     let document = PathBuf::from(document_path);
-    let relative = PathBuf::from(&image_source);
+    let source = PathBuf::from(&image_source);
     let first_segment = image_source.split(['/', '\\']).next().unwrap_or_default();
     if image_source.is_empty()
         || image_source.contains('\0')
-        || relative.is_absolute()
-        || first_segment.contains(':')
+        || (!source.is_absolute() && first_segment.contains(':'))
     {
-        return Err(ApiError::invalid(
-            "Only local relative image paths are supported",
-        ));
+        return Err(ApiError::invalid("The local image path is invalid"));
     }
 
     let parent = document
         .parent()
         .ok_or_else(|| ApiError::invalid("The Markdown path has no parent directory"))?;
-    let root = parent
-        .canonicalize()
-        .map_err(|error| ApiError::io("Cannot resolve the Markdown directory", error))?;
-    let image_path = root
-        .join(relative)
-        .canonicalize()
-        .map_err(|error| ApiError::io("Cannot resolve the local image", error))?;
-    if !image_path.starts_with(&root) {
-        return Err(ApiError::invalid(
-            "The local image must remain inside the Markdown directory",
-        ));
+    let image_path = if source.is_absolute() {
+        source
+    } else {
+        parent.join(source)
     }
+    .canonicalize()
+    .map_err(|error| ApiError::io("Cannot resolve the local image", error))?;
     let metadata = fs::metadata(&image_path)
         .map_err(|error| ApiError::io("Cannot read local image metadata", error))?;
     if !metadata.is_file() || metadata.len() > MAX_LOCAL_IMAGE_BYTES {
@@ -450,33 +442,38 @@ pub fn resolve_markdown_link(
 ) -> Result<String, ApiError> {
     let document = PathBuf::from(document_path);
     validate_markdown_path(&document)?;
-    let relative = PathBuf::from(&target_path);
+    let target = PathBuf::from(&target_path);
     let first_segment = target_path.split(['/', '\\']).next().unwrap_or_default();
     if target_path.is_empty()
         || target_path.contains('\0')
-        || relative.is_absolute()
-        || first_segment.contains(':')
+        || (!target.is_absolute() && first_segment.contains(':'))
     {
-        return Err(ApiError::invalid(
-            "Only relative Markdown links are supported",
-        ));
+        return Err(ApiError::invalid("The Markdown link path is invalid"));
     }
-    validate_markdown_path(&relative)?;
 
-    let root = document
+    let parent = document
         .parent()
-        .ok_or_else(|| ApiError::invalid("The Markdown path has no parent directory"))?
-        .canonicalize()
-        .map_err(|error| ApiError::io("Cannot resolve the document directory", error))?;
-    let candidate = root
-        .join(relative)
+        .ok_or_else(|| ApiError::invalid("The Markdown path has no parent directory"))?;
+    let candidate = if target.is_absolute() {
+        target
+    } else {
+        parent.join(target)
+    };
+    let candidate = if candidate.extension().is_none() {
+        [
+            candidate.with_extension("md"),
+            candidate.with_extension("markdown"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| ApiError::invalid("Cannot find the Markdown link"))?
+    } else {
+        validate_markdown_path(&candidate)?;
+        candidate
+    };
+    let candidate = candidate
         .canonicalize()
         .map_err(|error| ApiError::io("Cannot resolve the Markdown link", error))?;
-    if !candidate.starts_with(&root) {
-        return Err(ApiError::invalid(
-            "The Markdown link is outside the document directory",
-        ));
-    }
     let metadata = fs::metadata(&candidate)
         .map_err(|error| ApiError::io("Cannot read the Markdown link", error))?;
     if !metadata.is_file() {
@@ -735,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_only_relative_local_images() {
+    fn loads_relative_parent_and_absolute_local_images() {
         let directory = tempfile::tempdir().expect("tempdir");
         let document_directory = directory.path().join("document");
         fs::create_dir(&document_directory).expect("create document directory");
@@ -759,32 +756,29 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
-            read_local_image(
-                document.to_string_lossy().into_owned(),
-                image.to_string_lossy().into_owned(),
-            )
-            .is_err()
-        );
-        assert!(
-            read_local_image(
-                document.to_string_lossy().into_owned(),
-                "../outside.png".to_string(),
-            )
-            .is_err()
-        );
+        let absolute = read_local_image(
+            document.to_string_lossy().into_owned(),
+            image.to_string_lossy().into_owned(),
+        )
+        .expect("load absolute image");
+        assert_eq!(absolute, "data:image/png;base64,iVBORw==");
+        let parent_relative = read_local_image(
+            document.to_string_lossy().into_owned(),
+            "../outside.png".to_string(),
+        )
+        .expect("load parent-relative image");
+        assert_eq!(parent_relative, "data:image/png;base64,iVBORw==");
         #[cfg(unix)]
         {
             let linked_image = document_directory.join("linked.png");
             std::os::unix::fs::symlink(&outside_image, &linked_image)
                 .expect("create image symlink");
-            assert!(
-                read_local_image(
-                    document.to_string_lossy().into_owned(),
-                    "linked.png".to_string(),
-                )
-                .is_err()
-            );
+            let linked = read_local_image(
+                document.to_string_lossy().into_owned(),
+                "linked.png".to_string(),
+            )
+            .expect("load symlinked image");
+            assert_eq!(linked, "data:image/png;base64,iVBORw==");
         }
         assert!(
             read_local_image(
@@ -830,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_only_markdown_links_inside_the_document_directory() {
+    fn resolves_relative_parent_absolute_and_extensionless_markdown_links() {
         let parent = tempfile::tempdir().expect("parent tempdir");
         let root = parent.path().join("notes");
         fs::create_dir_all(root.join("nested")).expect("create notes");
@@ -850,13 +844,27 @@ mod tests {
             PathBuf::from(resolved),
             target.canonicalize().expect("canonical target")
         );
-        assert!(
-            resolve_markdown_link(
-                document.to_string_lossy().into_owned(),
-                "../outside.md".to_string(),
-            )
-            .is_err()
+        let parent_relative = resolve_markdown_link(
+            document.to_string_lossy().into_owned(),
+            "../outside.md".to_string(),
+        )
+        .expect("resolve parent-relative target");
+        assert_eq!(
+            PathBuf::from(parent_relative),
+            outside.canonicalize().unwrap()
         );
+        let absolute = resolve_markdown_link(
+            document.to_string_lossy().into_owned(),
+            outside.to_string_lossy().into_owned(),
+        )
+        .expect("resolve absolute target");
+        assert_eq!(PathBuf::from(absolute), outside.canonicalize().unwrap());
+        let extensionless = resolve_markdown_link(
+            document.to_string_lossy().into_owned(),
+            "nested/target".to_string(),
+        )
+        .expect("resolve extensionless target");
+        assert_eq!(PathBuf::from(extensionless), target.canonicalize().unwrap());
         assert!(
             resolve_markdown_link(
                 document.to_string_lossy().into_owned(),

@@ -12,7 +12,7 @@ import { createEditorExtensions } from "./extensions";
 import { parseTrackedMarkdown } from "./sourceDocument";
 
 vi.mock("./mermaidRenderer", () => ({
-  renderMermaidSvg: vi.fn(async () => '<svg viewBox="0 0 100 80"></svg>')
+  renderDiagramSvg: vi.fn(async () => '<svg viewBox="0 0 100 80"></svg>')
 }));
 
 const editors: Editor[] = [];

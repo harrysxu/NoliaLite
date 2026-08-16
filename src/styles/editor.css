@@ -180,7 +180,7 @@
 }
 
 .tableWrapper {
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
   margin: 1.35em 0;
   overflow-x: auto;
@@ -188,8 +188,8 @@
 }
 
 .nolia-editor table {
-  width: max-content;
-  min-width: min(100%, 360px);
+  width: 100%;
+  min-width: 360px;
   max-width: none;
   border-collapse: collapse;
   table-layout: auto;
@@ -204,7 +204,7 @@
   padding: 6px 9px;
   border: 1px solid var(--border);
   vertical-align: top;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
   word-break: normal;
 }
 
@@ -235,43 +235,102 @@
   font-size: 0.86em;
 }
 
-.nolia-editor .is-active-block-syntax,
-.nolia-editor .is-active-inline-syntax {
-  position: relative;
+.markdown-inline-session {
+  display: inline;
+  max-width: 100%;
+  color: var(--text);
+  font: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
 }
 
-.nolia-editor .is-active-block-syntax::before {
-  position: absolute;
-  top: 0;
-  right: 100%;
-  margin-right: 8px;
-  color: var(--text-faint);
-  content: attr(data-markdown-prefix);
-  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
-  font-size: 0.82em;
-  font-style: normal;
+.markdown-inline-session.is-block {
+  display: block;
+  width: 100%;
+  font-size: 16px;
   font-weight: 400;
-  pointer-events: none;
-  white-space: pre;
+  line-height: 1.6;
 }
 
-.nolia-editor .is-active-inline-syntax::before,
-.nolia-editor .is-active-inline-syntax::after {
+.markdown-inline-editor {
+  min-width: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  caret-color: var(--accent);
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.markdown-inline-session.is-block .markdown-inline-editor {
+  display: block;
+  width: 100%;
+}
+
+.markdown-inline-editor:empty {
+  display: inline-block;
+  min-width: 1ch;
+}
+
+.markdown-inline-token.is-delimiter {
   color: var(--text-faint);
   font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
-  font-size: 0.82em;
+  font-size: 0.86em;
   font-style: normal;
   font-weight: 400;
-  pointer-events: none;
   text-decoration: none;
 }
 
-.nolia-editor .is-active-inline-syntax::before {
-  content: attr(data-markdown-prefix);
+.markdown-inline-token.is-bold {
+  font-weight: 700;
 }
 
-.nolia-editor .is-active-inline-syntax::after {
-  content: attr(data-markdown-suffix);
+.markdown-inline-token.is-italic {
+  font-style: italic;
+}
+
+.markdown-inline-token.is-strike {
+  text-decoration: line-through;
+}
+
+.markdown-inline-token.is-code {
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: var(--code-bg);
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 0.84em;
+}
+
+.markdown-inline-token.is-link-destination {
+  color: var(--accent);
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.markdown-inline-session.has-source-error .markdown-inline-editor {
+  box-shadow: inset 0 -1px var(--danger);
+}
+
+.is-markdown-syntax-hidden-inline {
+  display: none;
+}
+
+.nolia-editor .is-markdown-syntax-hidden-node {
+  font-size: 0 !important;
+  line-height: 1.6;
+}
+
+.nolia-editor .is-markdown-syntax-hidden-node > :not(.markdown-inline-session) {
+  display: none !important;
 }
 
 .nolia-editor .selectedCell::after {
@@ -303,18 +362,39 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 11%, transparent);
 }
 
-.mermaid-block-source {
+.mermaid-block-editor {
   order: 1;
+  display: grid;
+  gap: 0;
+  margin: 0 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--code-bg);
+}
+
+.mermaid-block-language {
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  outline: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: 12px/32px "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+}
+
+.mermaid-block-source {
   display: block;
   width: 100%;
   min-height: 110px;
-  margin: 0 0 12px;
+  margin: 0;
   padding: 10px 12px;
   resize: vertical;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border: 0;
   outline: 0;
-  background: var(--code-bg);
+  background: transparent;
   color: var(--text);
   font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
@@ -322,7 +402,7 @@
   tab-size: 2;
 }
 
-.mermaid-block-source:focus {
+.mermaid-block-editor:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
 }

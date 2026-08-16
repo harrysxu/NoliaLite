@@ -20,7 +20,6 @@ import { readLocalImage, storeDocumentImage } from "../bridge/tauriClient";
 import { MermaidBlock, type DiagramViewerContent } from "./MermaidBlock";
 import { FootnoteBlock, FootnoteReference, InlineMath, MathBlock, SafeHtmlBlock } from "./ComplexBlocks";
 import { decodeProtectedRaw, parseTrackedMarkdown, TRACKING_ATTRIBUTES, type ProtectedKind } from "./sourceDocument";
-import { SyntaxVisibility } from "./SyntaxVisibility";
 
 const lowlight = createLowlight(common);
 
@@ -161,9 +160,9 @@ const ProtectedBlock = Node.create({
   }
 });
 
-function localRelativeSource(source: string): string | undefined {
+function localImageSource(source: string): string | undefined {
   const withoutSuffix = source.split(/[?#]/, 1)[0];
-  if (!withoutSuffix || /^(?:[a-z][a-z\d+.-]*:|\/|\\)/i.test(withoutSuffix)) return undefined;
+  if (!withoutSuffix || /^[a-z][a-z\d+.-]*:/i.test(withoutSuffix)) return undefined;
   try {
     return decodeURIComponent(withoutSuffix);
   } catch {
@@ -188,8 +187,8 @@ function ImageNodeView({
   const [sourceError, setSourceError] = useState(false);
 
   useEffect(() => {
-    const relative = localRelativeSource(source);
-    if (!documentPath || !relative) {
+    const localSource = localImageSource(source);
+    if (!documentPath || !localSource) {
       setResolvedSource(undefined);
       setLoadingSource(false);
       return;
@@ -197,7 +196,7 @@ function ImageNodeView({
     let active = true;
     setResolvedSource(undefined);
     setLoadingSource(true);
-    void readLocalImage(documentPath, relative)
+    void readLocalImage(documentPath, localSource)
       .then((value) => {
         if (active) setResolvedSource(value);
       })
@@ -564,7 +563,6 @@ export function isAllowedLink(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return false;
   if (/^(javascript|data|vbscript):/i.test(trimmed)) return false;
-  if (/^(?:\/|\\|\.\.\/)/.test(trimmed)) return false;
   return /^(https?:|mailto:|tel:|ftp:|file:|#|\.\/)/i.test(trimmed) || !/^[a-z][a-z\d+.-]*:/i.test(trimmed);
 }
 
@@ -608,7 +606,6 @@ export function createEditorExtensions(
     FootnoteBlock,
     ProtectedBlock,
     SourceTracking,
-    SyntaxVisibility.configure({ enabled: editable }),
     PlainTextPaste,
     MarkdownNodeCopy,
     Markdown.configure({ indentation: { style: "space", size: 2 } })

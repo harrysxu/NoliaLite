@@ -54,6 +54,17 @@ const corpus = [
 ].join("\r\n");
 
 describe("Markdown acceptance corpus", () => {
+  it("keeps angle-bracket placeholders inside fenced code blocks", () => {
+    const markdown = "```text\nwss://{workspace}<model_name>\nAuthorization: Bearer <DASHSCOPE_API_KEY>\n```";
+    const manager = new MarkdownManager({ extensions: createEditorExtensions() });
+    const prepared = prepareSourceDocument(markdown);
+    expect(prepared.units).toHaveLength(1);
+    expect(prepared.units[0].kind).toBe("editable");
+    const parsed = parseTrackedMarkdown(markdown, manager);
+    expect(parsed.content?.[0]?.type).toBe("codeBlock");
+    expect(serializeTrackedMarkdown(parsed, manager, "lf")).toBe(markdown);
+  });
+
   it("round-trips all MVP families with CRLF and no trailing newline", () => {
     const manager = new MarkdownManager({ extensions: createEditorExtensions() });
     const parsed = parseTrackedMarkdown(corpus, manager);

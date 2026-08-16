@@ -10,7 +10,7 @@ import { createEditorExtensions } from "./extensions";
 import { codeBlockTextAtSelection, MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
 
 vi.mock("./mermaidRenderer", () => ({
-  renderMermaidSvg: vi.fn(async () => "<svg viewBox=\"0 0 100 80\"></svg>")
+  renderDiagramSvg: vi.fn(async () => "<svg viewBox=\"0 0 100 80\"></svg>")
 }));
 
 beforeAll(() => {
@@ -25,6 +25,10 @@ beforeAll(() => {
   if (!Range.prototype.getBoundingClientRect) {
     Range.prototype.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
   }
+  if (!("getBoundingClientRect" in Text.prototype)) {
+    Object.defineProperty(Text.prototype, "getBoundingClientRect", { value: () => new DOMRect(0, 0, 0, 0) });
+  }
+  HTMLElement.prototype.scrollIntoView = () => undefined;
 });
 
 afterEach(() => {
@@ -32,17 +36,74 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function sourceText(source: HTMLElement): string {
+  return source.textContent ?? "";
+}
+
+function replaceSource(source: HTMLElement, markdown: string): void {
+  source.textContent = markdown;
+  fireEvent.input(source, { inputType: "insertText", data: markdown });
+}
+
 describe("MarkdownEditor interactions", () => {
-  it("keeps rendered blocks editable in place when clicked", async () => {
+  it("edits heading markers as local Markdown", async () => {
+    const onChange = vi.fn();
     const { container } = render(
-      <MarkdownEditor value={"## 标题\n\n**粗体**\n\n> 引用"} preferredEol="lf" editable onChange={() => undefined} />
+      <MarkdownEditor value={"## 标题\n\n正文"} preferredEol="lf" editable onChange={onChange} />
     );
-    const heading = await screen.findByText("标题");
-    fireEvent.focus(screen.getByLabelText("Markdown 文档"));
-    fireEvent.click(heading);
-    expect(container.querySelector("h2")).toBeTruthy();
-    expect(container.querySelector("h2")?.classList.contains("is-active-block-syntax")).toBe(true);
-    expect(screen.queryByRole("textbox", { name: /Markdown 源码/ })).toBeNull();
+    const heading = await waitFor(() => {
+      const value = container.querySelector("h2");
+      if (!value) throw new Error("heading not rendered");
+      return value;
+    });
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => heading });
+    fireEvent.mouseDown(heading, { button: 0, clientX: 1, clientY: 1 });
+    const source = await screen.findByRole("textbox", { name: "标题 Markdown 源码" });
+    expect(sourceText(source)).toBe("## 标题");
+    replaceSource(source, "### 新标题");
+    fireEvent.keyDown(source, { key: "Enter" });
+
+    await waitFor(() => expect(container.querySelector("h3")?.textContent).toBe("新标题"));
+    expect(onChange.mock.calls.at(-1)?.[0]).toContain("### 新标题");
+  });
+
+  it("edits inline delimiters without switching the document to source mode", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <MarkdownEditor value="前文 **粗体** 后文" preferredEol="lf" editable onChange={onChange} />
+    );
+    const strong = await waitFor(() => {
+      const value = container.querySelector("strong");
+      if (!value) throw new Error("bold text not rendered");
+      return value;
+    });
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => strong });
+    fireEvent.mouseDown(strong, { button: 0, clientX: 1, clientY: 1 });
+    const source = await screen.findByRole("textbox", { name: "粗体 Markdown 源码" });
+    expect(sourceText(source)).toBe("**粗体**");
+    replaceSource(source, "*斜体*");
+    fireEvent.keyDown(source, { key: "Enter" });
+
+    await waitFor(() => expect(container.querySelector("em")?.textContent).toBe("斜体"));
+    expect(container.querySelector("strong")).toBeNull();
+    expect(onChange.mock.calls.at(-1)?.[0]).toContain("*斜体*");
+  });
+
+  it("opens list item Markdown at a valid text selection", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { container } = render(
+      <MarkdownEditor value="- 列表项" preferredEol="lf" editable onChange={() => undefined} />
+    );
+    const item = await waitFor(() => {
+      const value = container.querySelector("li");
+      if (!value) throw new Error("list item not rendered");
+      return value;
+    });
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => item });
+    fireEvent.mouseDown(item, { button: 0, clientX: 1, clientY: 1 });
+
+    expect(sourceText(await screen.findByRole("textbox", { name: "列表项 Markdown 源码" }))).toBe("- 列表项");
+    expect(warning).not.toHaveBeenCalledWith(expect.stringContaining("TextSelection endpoint"));
   });
 
   it("toggles a single full-document source editor with Cmd+/ semantics", async () => {
@@ -93,7 +154,7 @@ describe("MarkdownEditor interactions", () => {
     expect(onError).toHaveBeenCalledWith("请先退出源码模式再使用格式命令。");
   });
 
-  it("navigates links on a normal click and marks modified clicks as new-window", async () => {
+  it("edits links on a normal click and opens them only on modified click", async () => {
     const onOpenLink = vi.fn();
     const { container } = render(
       <MarkdownEditor
@@ -110,10 +171,46 @@ describe("MarkdownEditor interactions", () => {
       if (!value) throw new Error("link not rendered");
       return value;
     });
-    fireEvent.click(anchor);
-    expect(onOpenLink).toHaveBeenLastCalledWith("./next.md#details", { newWindow: false });
-    fireEvent.click(anchor, { metaKey: true });
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => anchor });
+    fireEvent.mouseDown(anchor, { button: 0, clientX: 1, clientY: 1 });
+    const source = await screen.findByRole("textbox", { name: "链接 Markdown 源码" });
+    expect(sourceText(source)).toBe("[下一篇](./next.md#details)");
+    expect(onOpenLink).not.toHaveBeenCalled();
+    fireEvent.keyDown(source, { key: "Escape" });
+
+    const restoredAnchor = await waitFor(() => {
+      const value = container.querySelector<HTMLAnchorElement>("a[href]");
+      if (!value) throw new Error("link not restored");
+      return value;
+    });
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => restoredAnchor });
+    fireEvent.mouseDown(restoredAnchor, { metaKey: true });
+    fireEvent.mouseUp(restoredAnchor, { metaKey: true });
+    fireEvent.click(restoredAnchor, { metaKey: true });
     expect(onOpenLink).toHaveBeenLastCalledWith("./next.md#details", { newWindow: true });
+  });
+
+  it("opens links normally in readonly documents", async () => {
+    const onOpenLink = vi.fn();
+    const { container } = render(
+      <MarkdownEditor
+        value="[只读链接](./next.md)"
+        preferredEol="lf"
+        editable={false}
+        onChange={() => undefined}
+        onOpenLink={onOpenLink}
+      />
+    );
+    const anchor = await waitFor(() => {
+      const value = container.querySelector<HTMLAnchorElement>("a[href]");
+      if (!value) throw new Error("link not rendered");
+      return value;
+    });
+    fireEvent.mouseDown(anchor);
+    fireEvent.mouseUp(anchor);
+    fireEvent.click(anchor);
+    expect(onOpenLink).toHaveBeenLastCalledWith("./next.md", { newWindow: false });
+    expect(screen.queryByRole("textbox", { name: "链接 Markdown 源码" })).toBeNull();
   });
 
   it("copies the current code block with the keyboard command", async () => {
@@ -148,6 +245,25 @@ describe("MarkdownEditor interactions", () => {
 
     ref.current!.find("");
     expect(container.querySelector(".find-match")).toBeNull();
+  });
+
+  it("jumps from the outline without rewriting the document", async () => {
+    const ref = createRef<MarkdownEditorHandle>();
+    const onChange = vi.fn();
+    render(
+      <MarkdownEditor
+        ref={ref}
+        value={"# First\n\n| A | B |\n| --- | --- |\n| one | two |\n\n## Target\n"}
+        preferredEol="lf"
+        editable
+        onChange={onChange}
+      />
+    );
+    await screen.findByText("Target");
+    onChange.mockClear();
+
+    expect(ref.current!.jumpToHeading("target")).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("finds a top-level code block selected as a node", () => {

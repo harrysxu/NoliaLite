@@ -349,6 +349,80 @@
   overscroll-behavior-y: contain;
 }
 
+.document-layout {
+  display: flex;
+  min-height: 100%;
+  align-items: stretch;
+}
+
+.document-editor-pane {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.document-outline {
+  position: sticky;
+  top: 0;
+  width: 208px;
+  height: calc(100dvh - 38px);
+  max-height: calc(100dvh - 38px);
+  flex: 0 0 208px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  scrollbar-width: thin;
+}
+
+.document-outline-header {
+  display: flex;
+  height: 42px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.document-outline ol {
+  margin: 7px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.document-outline li {
+  margin: 0;
+}
+
+.document-outline button {
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  padding-top: 5px;
+  padding-right: 10px;
+  padding-bottom: 5px;
+  overflow: hidden;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-outline button:hover,
+.document-outline button:focus-visible {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text);
+}
+
 html.is-pdf-exporting,
 html.is-pdf-exporting body,
 html.is-pdf-exporting #root,
@@ -364,6 +438,7 @@ html.is-pdf-exporting .document-view {
 
 html.is-pdf-exporting .title-bar,
 html.is-pdf-exporting .history-view,
+html.is-pdf-exporting .document-outline,
 html.is-pdf-exporting .status-banner,
 html.is-pdf-exporting .find-bar,
 html.is-pdf-exporting .dialog-backdrop,
@@ -427,6 +502,7 @@ html.is-pdf-exporting .nolia-editor .ProseMirror-selectednode {
 
   .title-bar,
   .history-view,
+  .document-outline,
   .status-banner,
   .find-bar,
   .dialog-backdrop,
@@ -656,5 +732,11 @@ html.is-pdf-exporting .nolia-editor .ProseMirror-selectednode {
   .history-sidebar {
     width: min(328px, 72vw);
     min-width: 260px;
+  }
+}
+
+@media (max-width: 860px) {
+  .document-outline {
+    display: none;
   }
 }

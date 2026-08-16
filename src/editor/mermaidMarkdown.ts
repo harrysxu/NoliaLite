@@ -47,24 +47,61 @@ const mermaidFenceDirectives = new Map<string, string>([
   ["xychart-beta", "xychart-beta"]
 ]);
 
+export type DiagramKind = "mermaid" | "sequence" | "flow";
+
+export type DiagramMarkdownParts = {
+  language: string;
+  body: string;
+  fence: string;
+  eol: "\n" | "\r\n";
+};
+
+const standaloneDiagramLanguages = new Set<DiagramKind>(["sequence", "flow"]);
+
 function mermaidFenceDirective(info: string | undefined): string | undefined {
   const language = info?.trim().split(/\s+/, 1)[0].toLowerCase();
   return language ? mermaidFenceDirectives.get(language) : undefined;
 }
 
 export function isMermaidFence(info: string | undefined): boolean {
-  return mermaidFenceDirective(info) !== undefined;
+  const language = info?.trim().split(/\s+/, 1)[0].toLowerCase();
+  return Boolean(language && (standaloneDiagramLanguages.has(language as DiagramKind) || mermaidFenceDirectives.has(language)));
 }
 
-export function mermaidSourceFromMarkdown(markdown: string): string {
+export function diagramMarkdownParts(markdown: string): DiagramMarkdownParts {
   const opening = markdown.match(/^ {0,3}(`{3,}|~{3,})\s*([^\r\n]*)\r?\n?/);
-  if (!opening) return markdown.trim();
+  if (!opening) {
+    return { language: "mermaid", body: markdown.trim(), fence: "```", eol: "\n" };
+  }
 
   const fence = opening[1];
   const escapedFence = fence[0] === "`" ? "`" : "~";
   const closing = new RegExp(`(?:\\r?\\n)? {0,3}${escapedFence}{${fence.length},}[ \\t]*(?:\\r?\\n)?$`);
   const body = markdown.slice(opening[0].length).replace(closing, "").trimEnd();
-  const directive = mermaidFenceDirective(opening[2]);
+  return {
+    language: opening[2].trim(),
+    body,
+    fence,
+    eol: markdown.includes("\r\n") ? "\r\n" : "\n"
+  };
+}
+
+export function updateDiagramMarkdown(markdown: string, language: string, body: string): string {
+  const parts = diagramMarkdownParts(markdown);
+  const info = language.trim();
+  const normalizedBody = body.replace(/[\r\n]+$/, "");
+  return `${parts.fence}${info}${parts.eol}${normalizedBody}${parts.eol}${parts.fence}`;
+}
+
+export function diagramKindFromMarkdown(markdown: string): DiagramKind {
+  const language = diagramMarkdownParts(markdown).language.toLowerCase().split(/\s+/, 1)[0];
+  return standaloneDiagramLanguages.has(language as DiagramKind) ? language as DiagramKind : "mermaid";
+}
+
+export function mermaidSourceFromMarkdown(markdown: string): string {
+  const parts = diagramMarkdownParts(markdown);
+  const directive = mermaidFenceDirective(parts.language);
+  const body = parts.body;
   if (!directive || new RegExp(`^${escapeRegExp(directive)}\\b`).test(body.trimStart())) return body;
   return `${directive}\n${body}`;
 }

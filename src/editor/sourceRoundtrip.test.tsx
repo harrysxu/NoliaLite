@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 
+import { getSchema } from "@tiptap/core";
 import { MarkdownManager } from "@tiptap/markdown";
+import { EditorState } from "@tiptap/pm/state";
+import { fixTables } from "@tiptap/pm/tables";
 import { describe, expect, it } from "vitest";
 
 import { createEditorExtensions } from "./extensions";
-import { parseTrackedMarkdown, serializeTrackedMarkdown } from "./sourceDocument";
+import { normalizeTrackedTables, parseTrackedMarkdown, serializeTrackedMarkdown } from "./sourceDocument";
 
 function manager() {
   return new MarkdownManager({ extensions: createEditorExtensions() });
@@ -40,6 +43,27 @@ describe("source-preserving Markdown pipeline", () => {
     expect(result).toContain("# Changed");
     expect(result).toContain("Paragraph   with spacing.\n\n");
     expect(result).toContain("[[Unsupported]]\n");
+  });
+
+  it("repairs parsed table structure without rewriting untouched source", () => {
+    const source = [
+      "| Column A | Column B | Column C |",
+      "| --- | --- | --- |",
+      "| long value | second | third |",
+      "",
+      "```html",
+      "<model_name>",
+      "```",
+      ""
+    ].join("\n");
+    const extensions = createEditorExtensions();
+    const markdown = new MarkdownManager({ extensions });
+    const schema = getSchema(extensions);
+    const normalized = normalizeTrackedTables(parseTrackedMarkdown(source, markdown), schema);
+    const state = EditorState.create({ schema, doc: schema.nodeFromJSON(normalized) });
+
+    expect(fixTables(state)).toBeUndefined();
+    expect(serializeTrackedMarkdown(normalized, markdown, "lf")).toBe(source);
   });
 
   it("round-trips untouched Mermaid source exactly", () => {

@@ -40,6 +40,7 @@ import {
   writeDraft
 } from "../bridge/tauriClient";
 import { DecisionDialog, type DecisionSpec } from "../components/DecisionDialog";
+import { DocumentOutline } from "../components/DocumentOutline";
 import { FindBar } from "../components/FindBar";
 import { HistorySidebar } from "../components/HistorySidebar";
 import { StatusBanner } from "../components/StatusBanner";
@@ -859,21 +860,29 @@ export function App() {
               }}
             />
           ) : null}
-          <EditorErrorBoundary key={`${session.sessionId}:${session.filePath ?? ""}:${session.access}`}>
-            <Suspense fallback={<div className="editor-loading" aria-label="正在载入文档" />}>
-              <MarkdownEditor
-                ref={editorRef}
-                value={session.markdown}
-                filePath={session.filePath}
-                preferredEol={session.format.preferredEol}
-                editable={session.access === "writable"}
-                autofocus={session.kind === "untitled"}
-                onChange={(markdown) => dispatch({ type: "edit", sessionId: session.sessionId, markdown })}
-                onOpenLink={(href, options) => void openMarkdownLink(href, options)}
-                onError={showNotice}
-              />
-            </Suspense>
-          </EditorErrorBoundary>
+          <div className="document-layout">
+            <DocumentOutline
+              markdown={session.markdown}
+              onSelect={(reference) => editorRef.current?.jumpToHeading(reference)}
+            />
+            <div className="document-editor-pane">
+              <EditorErrorBoundary key={`${session.sessionId}:${session.filePath ?? ""}:${session.access}`}>
+                <Suspense fallback={<div className="editor-loading" aria-label="正在载入文档" />}>
+                  <MarkdownEditor
+                    ref={editorRef}
+                    value={session.markdown}
+                    filePath={session.filePath}
+                    preferredEol={session.format.preferredEol}
+                    editable={session.access === "writable"}
+                    autofocus={session.kind === "untitled"}
+                    onChange={(markdown) => dispatch({ type: "edit", sessionId: session.sessionId, markdown })}
+                    onOpenLink={(href, options) => void openMarkdownLink(href, options)}
+                    onError={showNotice}
+                  />
+                </Suspense>
+              </EditorErrorBoundary>
+            </div>
+          </div>
         </main>
       ) : (
         <HistorySidebar
