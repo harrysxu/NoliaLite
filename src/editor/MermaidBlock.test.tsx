@@ -3,10 +3,11 @@
 import { Editor } from "@tiptap/core";
 import { MarkdownManager } from "@tiptap/markdown";
 import { EditorContent } from "@tiptap/react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createEditorExtensions } from "./extensions";
+import { renderDiagramSvg } from "./mermaidRenderer";
 import { parseTrackedMarkdown } from "./sourceDocument";
 
 vi.mock("./mermaidRenderer", () => ({
@@ -21,6 +22,8 @@ const editors: Editor[] = [];
 afterEach(() => {
   cleanup();
   editors.splice(0).forEach((editor) => editor.destroy());
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function renderDiagram(onOpenDiagram = vi.fn()) {
@@ -62,5 +65,34 @@ describe("Mermaid block interactions", () => {
     const setData = vi.fn();
     fireEvent.copy(editor.view.dom, { clipboardData: { setData } });
     expect(setData).toHaveBeenCalledWith("text/plain", expect.stringContaining("```mermaid"));
+  });
+
+  it("rerenders the SVG when the system color scheme changes", async () => {
+    let dark = false;
+    let changeListener: ((event: MediaQueryListEvent) => void) | undefined;
+    const mediaQuery = {
+      get matches() { return dark; },
+      media: "(prefers-color-scheme: dark)",
+      onchange: null,
+      addEventListener: vi.fn((_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        changeListener = listener;
+      }),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    } as unknown as MediaQueryList;
+    vi.stubGlobal("matchMedia", vi.fn(() => mediaQuery));
+
+    renderDiagram();
+    await waitFor(() => expect(renderDiagramSvg).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      dark = true;
+      changeListener?.({ matches: true } as MediaQueryListEvent);
+    });
+
+    await waitFor(() => expect(renderDiagramSvg).toHaveBeenCalledTimes(2));
+    expect(renderDiagramSvg).toHaveBeenLastCalledWith(expect.stringContaining("graph TD"));
   });
 });

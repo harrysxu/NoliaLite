@@ -17,6 +17,8 @@ import type { DiagramViewerContent } from "./DiagramViewer";
 
 export type { DiagramViewerContent } from "./DiagramViewer";
 
+const DARK_MODE_QUERY = "(prefers-color-scheme: dark)";
+
 type MermaidBlockOptions = {
   onOpenDiagram?: (content: DiagramViewerContent) => void;
 };
@@ -87,7 +89,24 @@ function MermaidBlockView({
   const [svg, setSvg] = useState<string>();
   const [error, setError] = useState<string>();
   const [rendering, setRendering] = useState(true);
+  const [colorScheme, setColorScheme] = useState<"light" | "dark">(() =>
+    window.matchMedia?.(DARK_MODE_QUERY).matches ? "dark" : "light"
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.(DARK_MODE_QUERY);
+    if (!mediaQuery) return;
+    const handleChange = (event: MediaQueryListEvent) => {
+      setColorScheme(event.matches ? "dark" : "light");
+    };
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    }
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -108,7 +127,7 @@ function MermaidBlockView({
         if (active) setRendering(false);
       });
     return () => { active = false; };
-  }, [markdown]);
+  }, [markdown, colorScheme]);
 
   const selectNode = () => {
     const position = typeof getPos === "function" ? getPos() : undefined;
