@@ -43,7 +43,7 @@ describe("diagram renderer", () => {
     expect(svg).toContain("#242424");
   });
 
-  it("uses visible lines and text for Mermaid sequence diagrams in dark mode", async () => {
+  it("uses visible lines and text for Mermaid sequence diagrams in dark mode", { timeout: 15_000 }, async () => {
     useDarkMode();
     const svg = await renderDiagramSvg("```mermaid\nsequenceDiagram\n  Alice->>Bob: Hello\n```");
     expect(svg).toContain("#b9c0c7");

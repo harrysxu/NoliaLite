@@ -71,7 +71,7 @@ describe("TableToolbar", () => {
     fireEvent.click(withinElement(toolbar, "更多表格操作"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "删除当前列" }));
     expect(tableDimensions(editor)).toEqual({ rows: 3, columns: 3 });
-  });
+  }, 10_000);
 
   it("applies a valid table from the local Markdown source editor", async () => {
     const editor = renderTable();

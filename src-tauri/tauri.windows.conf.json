@@ -15,5 +15,8 @@
         "decorations": true
       }
     ]
+  },
+  "bundle": {
+    "targets": ["nsis"]
   }
 }
