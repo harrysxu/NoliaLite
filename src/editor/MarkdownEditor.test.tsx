@@ -154,6 +154,24 @@ describe("MarkdownEditor interactions", () => {
     expect(onError).toHaveBeenCalledWith("请先退出源码模式再使用格式命令。");
   });
 
+  it("keeps the current result while the find query is being extended", async () => {
+    const ref = createRef<MarkdownEditorHandle>();
+    render(
+      <MarkdownEditor
+        ref={ref}
+        value="foo appears here; foo appears later"
+        preferredEol="lf"
+        editable
+        onChange={() => undefined}
+      />
+    );
+    await screen.findByLabelText("Markdown 文档");
+
+    expect(ref.current!.find("f")).toEqual({ current: 1, total: 2 });
+    expect(ref.current!.find("fo")).toEqual({ current: 1, total: 2 });
+    expect(ref.current!.find("foo")).toEqual({ current: 1, total: 2 });
+  });
+
   it("edits links on a normal click and opens them only on modified click", async () => {
     const onOpenLink = vi.fn();
     const { container } = render(

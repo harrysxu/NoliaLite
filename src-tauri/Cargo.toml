@@ -1,6 +1,6 @@
 [package]
 name = "nolia-lite"
-version = "1.0.0"
+version = "1.0.1"
 description = "A lightweight, local-first Markdown editor"
 authors = ["Nolia"]
 edition = "2024"
@@ -19,7 +19,7 @@ notify = "8.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
-tauri = { version = "2.11.1", features = [] }
+tauri = { version = "2.11.1", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-single-instance = "2.3.6"

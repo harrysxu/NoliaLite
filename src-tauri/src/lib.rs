@@ -897,6 +897,7 @@ pub fn run() {
             document::inspect_document,
             document::save_document,
             document::write_export_document,
+            document::write_png_image,
             pdf_export::export_pdf,
             storage::write_draft,
             storage::delete_draft,

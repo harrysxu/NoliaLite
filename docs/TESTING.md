@@ -1,7 +1,7 @@
 # Nolia Lite 测试与发布
 
-> 版本：1.0.0
-> 最近执行：2026-08-16
+> 版本：1.0.1
+> 最近执行：2026-08-29
 > 依据：[产品需求](./PRODUCT_REQUIREMENTS.md)、[UI/UX 规格](./UI_UX_SPEC.md)、[技术方案](./TECHNICAL_DESIGN.md)
 > 首发平台：macOS arm64 / x86_64
 
@@ -73,13 +73,13 @@ npm run test:release
 
 ## 5. 当前结果
 
-2026-08-16 最终构建结果：
+2026-08-29 最终构建结果：
 
 | 项目 | 结果 |
 |---|---|
 | TypeScript 类型检查 | `PASS` |
-| 前端测试 | `PASS`，21 个测试文件、117 项测试 |
-| Rust 测试 | `PASS`，24 项测试 |
+| 前端测试 | `PASS`，21 个测试文件、125 项测试 |
+| Rust 测试 | `PASS`，25 项测试 |
 | Rust 格式与 Clippy | `PASS`，零警告 |
 | 生产依赖审计 | `PASS`，0 vulnerabilities |
 | 前端生产构建 | `PASS` |

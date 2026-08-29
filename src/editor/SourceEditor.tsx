@@ -85,7 +85,13 @@ export const SourceEditor = forwardRef<SourceEditorHandle, Props>(function Sourc
         if (index < 0) index = 0;
       }
       const match = matches[index];
+      const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+      // A textarea only scrolls its internal viewport to a programmatic
+      // selection while focused. Restore the find field afterwards so the
+      // next typed character still extends the query.
+      textarea.focus({ preventScroll: true });
       textarea.setSelectionRange(match.from, match.to);
+      if (previousFocus && previousFocus !== textarea) previousFocus.focus({ preventScroll: true });
       return { current: index + 1, total: matches.length };
     },
     codeBlockText: () => {

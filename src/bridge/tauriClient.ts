@@ -68,6 +68,18 @@ export async function pickExportSavePath(format: ExportFormat, defaultPath: stri
   return selected;
 }
 
+export async function savePngImage(defaultPath: string, bytes: Uint8Array): Promise<string | undefined> {
+  if (!isTauriRuntime()) return undefined;
+  const selected = await save({
+    title: "保存 PNG 图片",
+    defaultPath,
+    filters: [{ name: "PNG 图片", extensions: ["png"] }]
+  });
+  if (!selected) return undefined;
+  const filePath = /\.png$/i.test(selected) ? selected : `${selected}.png`;
+  return invoke<string>("write_png_image", { filePath, bytes: Array.from(bytes) });
+}
+
 export async function writeExportDocument(request: ExportDocumentRequest): Promise<string | undefined> {
   if (!isTauriRuntime()) return undefined;
   return invoke<string>("write_export_document", { request });

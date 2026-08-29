@@ -137,6 +137,7 @@ function textMatches(documentNode: Editor["state"]["doc"], query: string): Match
 
 function selectMatch(editor: Editor, query: string, direction: "next" | "previous"): FindResult {
   const matches = textMatches(editor.state.doc, query);
+  const previous = findHighlightKey.getState(editor.state);
   if (!matches.length) {
     const transaction = editor.state.tr.setMeta(findHighlightKey, { query, matches: [], current: -1 });
     if (!query && !editor.state.selection.empty) {
@@ -157,7 +158,11 @@ function selectMatch(editor: Editor, query: string, direction: "next" | "previou
     }
     if (index < 0) index = matches.length - 1;
   } else {
-    index = matches.findIndex((match) => match.from > cursor);
+    // While typing a query, keep the current result when the longer query
+    // still matches at the same position. Explicit next/previous actions
+    // continue from the current selection instead.
+    const queryChanged = previous?.query !== query;
+    index = matches.findIndex((match) => queryChanged ? match.from >= cursor : match.from > cursor);
     if (index < 0) index = 0;
   }
   const match = matches[index];
@@ -167,6 +172,12 @@ function selectMatch(editor: Editor, query: string, direction: "next" | "previou
       .setMeta(findHighlightKey, { query, matches, current: index })
       .scrollIntoView()
   );
+  requestAnimationFrame(() => {
+    editor.view.dom.querySelector<HTMLElement>(".find-match.is-current")?.scrollIntoView?.({
+      block: "center",
+      inline: "nearest"
+    });
+  });
   return { current: index + 1, total: matches.length };
 }
 

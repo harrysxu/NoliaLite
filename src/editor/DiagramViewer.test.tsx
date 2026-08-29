@@ -1,9 +1,23 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DiagramViewer, _testing } from "./DiagramViewer";
+
+const imageBridge = vi.hoisted(() => ({
+  isTauriRuntime: vi.fn<() => boolean>(() => false),
+  savePngImage: vi.fn<(defaultPath: string, bytes: Uint8Array) => Promise<string | undefined>>(
+    async () => "/tmp/diagram.png"
+  )
+}));
+
+vi.mock("../bridge/tauriClient", () => imageBridge);
+
+beforeEach(() => {
+  imageBridge.isTauriRuntime.mockReturnValue(false);
+  imageBridge.savePngImage.mockClear();
+});
 
 afterEach(() => {
   cleanup();
@@ -89,5 +103,39 @@ describe("DiagramViewer", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:diagram-png"));
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:diagram-svg");
+  });
+
+  it("uses the native save path in the desktop app", async () => {
+    imageBridge.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:diagram-svg");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn()
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => {
+      callback({
+        arrayBuffer: async () => Uint8Array.from([0x89, 0x50, 0x4e, 0x47]).buffer
+      } as Blob);
+    });
+    class LoadedImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    vi.stubGlobal("Image", LoadedImage);
+
+    render(
+      <DiagramViewer
+        content={{ svg: '<svg viewBox="0 0 100 80"></svg>', markdown: "", name: "架构图" }}
+        onClose={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "下载 PNG 图片" }));
+
+    await waitFor(() => expect(imageBridge.savePngImage).toHaveBeenCalledOnce());
+    expect(imageBridge.savePngImage.mock.calls[0][0]).toBe("架构图.png");
+    expect(Array.from(imageBridge.savePngImage.mock.calls[0][1])).toEqual([0x89, 0x50, 0x4e, 0x47]);
   });
 });

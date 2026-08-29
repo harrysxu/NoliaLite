@@ -19,6 +19,7 @@ use crate::{
 const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
 const MAX_LOCAL_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 const ASSET_DIRECTORY: &str = "assets";
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -543,6 +544,32 @@ pub fn write_export_document(request: ExportDocumentRequest) -> Result<String, A
 }
 
 #[tauri::command]
+pub fn write_png_image(file_path: String, bytes: Vec<u8>) -> Result<String, ApiError> {
+    let path = PathBuf::from(file_path);
+    let is_png = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("png"));
+    if !is_png {
+        return Err(ApiError::invalid("Only .png image exports are supported"));
+    }
+    if !bytes.starts_with(&PNG_SIGNATURE) {
+        return Err(ApiError::invalid(
+            "The exported image is not a valid PNG file",
+        ));
+    }
+    if bytes.len() as u64 > MAX_LOCAL_IMAGE_BYTES {
+        return Err(ApiError::invalid("The exported PNG image is too large"));
+    }
+    write_atomically(&path, &bytes, None)?;
+    Ok(path
+        .canonicalize()
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned())
+}
+
+#[tauri::command]
 pub fn save_document(app: AppHandle, request: SaveDocumentRequest) -> SaveDocumentResult {
     let path = PathBuf::from(&request.file_path);
     if let Err(error) = validate_markdown_path(&path) {
@@ -677,6 +704,43 @@ mod tests {
         assert_eq!(
             PathBuf::from(result),
             path.canonicalize().expect("canonical export")
+        );
+    }
+
+    #[test]
+    fn writes_only_valid_png_exports() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("diagram.png");
+        let bytes = [PNG_SIGNATURE.as_slice(), &[1, 2, 3]].concat();
+        let result = write_png_image(path.to_string_lossy().into_owned(), bytes.clone())
+            .expect("write PNG export");
+        assert_eq!(fs::read(&path).expect("read PNG export"), bytes);
+        assert_eq!(
+            PathBuf::from(result),
+            path.canonicalize().expect("canonical PNG")
+        );
+
+        assert!(
+            write_png_image(
+                directory
+                    .path()
+                    .join("diagram.jpg")
+                    .to_string_lossy()
+                    .into_owned(),
+                PNG_SIGNATURE.to_vec()
+            )
+            .is_err()
+        );
+        assert!(
+            write_png_image(
+                directory
+                    .path()
+                    .join("invalid.png")
+                    .to_string_lossy()
+                    .into_owned(),
+                b"not a png".to_vec()
+            )
+            .is_err()
         );
     }
 

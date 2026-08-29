@@ -8,7 +8,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { Markdown } from "@tiptap/markdown";
 import { DOMSerializer, type Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { NodeSelection, Plugin } from "@tiptap/pm/state";
+import { NodeSelection, Plugin, type Selection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -462,14 +462,22 @@ const MarkdownNodeCopy = Extension.create({
               if (selection.empty) return false;
               const clipboard = event.clipboardData;
               if (!clipboard) return false;
-              const markdown = markdownForSelection(editor, selection instanceof NodeSelection ? selection.node : undefined);
-              if (!markdown) return false;
+              const selectedNode = selection instanceof NodeSelection ? selection.node : undefined;
+              const code = codeTextForSelection(selection);
+              const markdown = code === undefined ? markdownForSelection(editor, selectedNode) : undefined;
+              const visibleText = code ?? plainTextForSelection(selection, selectedNode);
+              // Atom nodes such as Mermaid have no rendered text to expose;
+              // retain their source as the only useful clipboard fallback.
+              const text = visibleText || (code === undefined ? markdown : undefined);
+              if (!text || (code === undefined && !markdown)) return false;
               const slice = selection.content();
               const wrapper = document.createElement("div");
-              wrapper.dataset.noliaLiteClipboard = "true";
-              wrapper.dataset.markdown = markdown;
+              if (code === undefined) {
+                wrapper.dataset.noliaLiteClipboard = "true";
+                wrapper.dataset.markdown = markdown!;
+              }
               wrapper.append(DOMSerializer.fromSchema(view.state.schema).serializeFragment(slice.content));
-              clipboard.setData("text/plain", markdown);
+              clipboard.setData("text/plain", text);
               clipboard.setData("text/html", wrapper.outerHTML);
               event.preventDefault();
               return true;
@@ -480,6 +488,22 @@ const MarkdownNodeCopy = Extension.create({
     ];
   }
 });
+
+function codeTextForSelection(selection: Selection): string | undefined {
+  if (selection instanceof NodeSelection) {
+    return selection.node.type.name === "codeBlock" ? selection.node.textContent : undefined;
+  }
+  const { $from, $to } = selection;
+  if (!$from.sameParent($to) || $from.parent.type.name !== "codeBlock") return undefined;
+  return $from.parent.textBetween($from.parentOffset, $to.parentOffset, "\n");
+}
+
+function plainTextForSelection(selection: Selection, selectedNode?: ProseMirrorNode): string {
+  const content = selection.content().content;
+  const text = content.textBetween(0, content.size, "\n");
+  if (text || !selectedNode) return text;
+  return selectedNode.textBetween(0, selectedNode.content.size, "\n");
+}
 
 function markdownForSelection(editor: Editor, selectedNode?: ProseMirrorNode): string | undefined {
   const manager = editor.markdown;

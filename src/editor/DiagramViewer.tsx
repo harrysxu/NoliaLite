@@ -2,6 +2,8 @@ import { Download, Pencil, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { isTauriRuntime, savePngImage } from "../bridge/tauriClient";
+
 export type DiagramViewerContent = {
   svg: string;
   markdown: string;
@@ -179,7 +181,11 @@ export async function downloadDiagramPng(svgMarkup: string, fileName: string): P
     if (!context) throw new Error("Canvas is unavailable");
     context.drawImage(image, 0, 0, width, height);
     const blob = await canvasBlob(canvas);
-    triggerDownload(blob, fileName);
+    if (isTauriRuntime()) {
+      await savePngImage(fileName, new Uint8Array(await blob.arrayBuffer()));
+    } else {
+      triggerDownload(blob, fileName);
+    }
   } finally {
     URL.revokeObjectURL(sourceUrl);
   }

@@ -119,7 +119,7 @@ describe("Markdown editor extensions", () => {
     editor.destroy();
   });
 
-  it("copies Markdown and restores Lite clipboard content structurally", () => {
+  it("copies visible text and restores Lite clipboard content structurally", () => {
     const source = new Editor({ extensions: createEditorExtensions(), content: "<p><strong>粗体</strong></p>" });
     source.view.dispatch(source.state.tr.setSelection(TextSelection.create(source.state.doc, 1, 3)));
     const values = new Map<string, string>();
@@ -133,7 +133,7 @@ describe("Markdown editor extensions", () => {
       return copied;
     });
     expect(copied).toBe(true);
-    expect(values.get("text/plain")).toBe("**粗体**");
+    expect(values.get("text/plain")).toBe("粗体");
     expect(values.get("text/html")).toContain("data-nolia-lite-clipboard");
 
     const target = new Editor({ extensions: createEditorExtensions(), content: "" });
@@ -141,6 +141,80 @@ describe("Markdown editor extensions", () => {
     expect(target.state.doc.firstChild?.firstChild?.marks[0]?.type.name).toBe("bold");
     source.destroy();
     target.destroy();
+  });
+
+  it("copies formatted table cell text without Markdown markers", () => {
+    const visibleText = "现场照片文件名，必须是当前产品 + 同一 customerId 在 5.1 上传的可用文件";
+    const source = new Editor({
+      extensions: createEditorExtensions(),
+      content: `<table><tbody><tr><td><p>现场照片文件名，必须是<strong>当前产品 + 同一 customerId</strong> 在 5.1 上传的可用文件</p></td></tr></tbody></table>`
+    });
+    let paragraphPosition = -1;
+    source.state.doc.descendants((node, position) => {
+      if (paragraphPosition < 0 && node.type.name === "paragraph") paragraphPosition = position;
+    });
+    expect(paragraphPosition).toBeGreaterThanOrEqual(0);
+    source.view.dispatch(source.state.tr.setSelection(TextSelection.create(
+      source.state.doc,
+      paragraphPosition + 1,
+      paragraphPosition + 1 + visibleText.length
+    )));
+    const values = new Map<string, string>();
+    const copyEvent = {
+      clipboardData: { setData: (type: string, value: string) => values.set(type, value) },
+      preventDefault: vi.fn()
+    } as unknown as ClipboardEvent;
+    let copied = false;
+    source.view.someProp("handleDOMEvents", (handlers) => {
+      copied = handlers.copy?.(source.view, copyEvent) || copied;
+      return copied;
+    });
+
+    expect(copied).toBe(true);
+    expect(values.get("text/plain")).toBe(visibleText);
+    expect(values.get("text/plain")).not.toContain("**");
+    expect(values.get("text/html")).toContain("data-markdown");
+    const target = new Editor({ extensions: createEditorExtensions(), content: "" });
+    expect(runPaste(target, pasteEvent(values.get("text/plain") ?? "", values.get("text/html") ?? ""))).toBe(true);
+    expect(target.state.doc.textContent).toBe(visibleText);
+    let hasBold = false;
+    target.state.doc.descendants((node) => {
+      if (node.marks.some((mark) => mark.type.name === "bold")) hasBold = true;
+    });
+    expect(hasBold).toBe(true);
+    source.destroy();
+    target.destroy();
+  });
+
+  it("copies selected code without Markdown fences", () => {
+    const code = "  bindingFeignService.createBinding();\nreturn result;";
+    const source = new Editor({
+      extensions: createEditorExtensions(),
+      content: {
+        type: "doc",
+        content: [{
+          type: "codeBlock",
+          attrs: { language: "java" },
+          content: [{ type: "text", text: code }]
+        }]
+      }
+    });
+    source.view.dispatch(source.state.tr.setSelection(TextSelection.create(source.state.doc, 1, code.length + 1)));
+    const values = new Map<string, string>();
+    const copyEvent = {
+      clipboardData: { setData: (type: string, value: string) => values.set(type, value) },
+      preventDefault: vi.fn()
+    } as unknown as ClipboardEvent;
+    let copied = false;
+    source.view.someProp("handleDOMEvents", (handlers) => {
+      copied = handlers.copy?.(source.view, copyEvent) || copied;
+      return copied;
+    });
+
+    expect(copied).toBe(true);
+    expect(values.get("text/plain")).toBe(code);
+    expect(values.get("text/html")).not.toContain("data-nolia-lite-clipboard");
+    source.destroy();
   });
 
   it("stores pasted image bytes and inserts a relative Markdown image", async () => {
