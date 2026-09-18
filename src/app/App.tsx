@@ -45,6 +45,7 @@ import { FindBar } from "../components/FindBar";
 import { HistorySidebar } from "../components/HistorySidebar";
 import { StatusBanner } from "../components/StatusBanner";
 import { TitleBar } from "../components/TitleBar";
+import { DocumentControls } from "../components/DocumentControls";
 import type { FindResult, MarkdownEditorHandle } from "../editor/MarkdownEditor";
 import { createExportHtml } from "../editor/exportDocument";
 import { EditorErrorBoundary } from "../components/EditorErrorBoundary";
@@ -110,8 +111,19 @@ export function App() {
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findResult, setFindResult] = useState<FindResult>(emptyFindResult);
+  const [preview, setPreview] = useState(false);
+  const [zoom, setZoom] = useState(1);
 
   sessionRef.current = session;
+
+  useEffect(() => {
+    setPreview(false);
+    setZoom(1);
+  }, [session?.sessionId]);
+
+  const adjustZoom = useCallback((delta: number) => {
+    setZoom((current) => Math.min(3, Math.max(0.5, Math.round((current + delta) * 100) / 100)));
+  }, []);
 
   const refreshLibrary = useCallback(async () => {
     const [recent, recovery] = await Promise.all([listRecentFiles(), listDrafts()]);
@@ -695,6 +707,10 @@ export function App() {
           else if (command === "file.export_pdf") void exportCurrent("pdf");
           else if (command === "edit.find") setFindOpen(true);
           else if (command === "edit.copy_code") void copyCurrentCode();
+          else if (command === "view.preview") setPreview((value) => !value);
+          else if (command === "view.zoom_in") adjustZoom(0.25);
+          else if (command === "view.zoom_out") adjustZoom(-0.25);
+          else if (command === "view.zoom_reset") setZoom(1);
           else if (command === "format.source") editorRef.current?.toggleSource();
           else if (command === "format.paragraph") editorRef.current?.setParagraph();
           else if (command.startsWith("format.heading")) editorRef.current?.toggleHeading(Number(command.slice(-1)) as 1 | 2 | 3 | 4 | 5 | 6);
@@ -737,7 +753,7 @@ export function App() {
       unlisteners.forEach((unlisten) => unlisten());
       window.removeEventListener("focus", drainPendingOpenPaths);
     };
-  }, [copyCurrentCode, exportCurrent, guardCurrent, jumpToHeadingSoon, newDocument, openPathsInWindows, openPicker, saveCurrent, showNotice]);
+  }, [adjustZoom, copyCurrentCode, exportCurrent, guardCurrent, jumpToHeadingSoon, newDocument, openPathsInWindows, openPicker, saveCurrent, showNotice]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -755,6 +771,18 @@ export function App() {
       } else if (key === "f") {
         event.preventDefault();
         setFindOpen(true);
+      } else if (key === "+" || key === "=") {
+        event.preventDefault();
+        adjustZoom(0.25);
+      } else if (key === "-") {
+        event.preventDefault();
+        adjustZoom(-0.25);
+      } else if (key === "p" && event.shiftKey) {
+        event.preventDefault();
+        setPreview((value) => !value);
+      } else if (key === "0" && event.shiftKey) {
+        event.preventDefault();
+        setZoom(1);
       } else if (key === "b" && sessionRef.current?.access === "writable") {
         event.preventDefault();
         editorRef.current?.toggleBold();
@@ -784,7 +812,7 @@ export function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [copyCurrentCode, newDocument, openPicker, saveCurrent]);
+  }, [adjustZoom, copyCurrentCode, newDocument, openPicker, saveCurrent]);
 
   const banner = (() => {
     if (notice) return <StatusBanner tone="info" message={notice} />;
@@ -846,6 +874,14 @@ export function App() {
       {banner}
       {session ? (
         <main className="document-view">
+          <DocumentControls
+            preview={preview}
+            zoom={zoom}
+            onTogglePreview={() => setPreview((value) => !value)}
+            onZoomOut={() => adjustZoom(-0.25)}
+            onZoomIn={() => adjustZoom(0.25)}
+            onResetZoom={() => setZoom(1)}
+          />
           {findOpen ? (
             <FindBar
               query={findQuery}
@@ -874,6 +910,8 @@ export function App() {
                     filePath={session.filePath}
                     preferredEol={session.format.preferredEol}
                     editable={session.access === "writable"}
+                    preview={preview}
+                    zoomScale={zoom}
                     autofocus={session.kind === "untitled"}
                     onChange={(markdown) => dispatch({ type: "edit", sessionId: session.sessionId, markdown })}
                     onOpenLink={(href, options) => void openMarkdownLink(href, options)}

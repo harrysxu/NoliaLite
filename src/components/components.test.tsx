@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DocumentSession } from "../app/documentSession";
 import type { RecentFile, RecoveryDraft } from "../bridge/contracts";
 import { DecisionDialog } from "./DecisionDialog";
+import { DocumentControls } from "./DocumentControls";
 import { DocumentOutline } from "./DocumentOutline";
 import { EditorErrorBoundary } from "./EditorErrorBoundary";
 import { FindBar } from "./FindBar";
@@ -32,6 +33,41 @@ const session = (overrides: Partial<DocumentSession> = {}): DocumentSession => (
 });
 
 describe("application page components", () => {
+  it("toggles preview and exposes bounded document zoom controls", () => {
+    const onTogglePreview = vi.fn();
+    const onZoomOut = vi.fn();
+    const onZoomIn = vi.fn();
+    const onResetZoom = vi.fn();
+    const { rerender } = render(
+      <DocumentControls
+        preview={false}
+        zoom={1}
+        onTogglePreview={onTogglePreview}
+        onZoomOut={onZoomOut}
+        onZoomIn={onZoomIn}
+        onResetZoom={onResetZoom}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "预览文档" }));
+    fireEvent.click(screen.getByRole("button", { name: "放大文档" }));
+    expect(onTogglePreview).toHaveBeenCalledOnce();
+    expect(onZoomIn).toHaveBeenCalledOnce();
+    rerender(
+      <DocumentControls
+        preview
+        zoom={3}
+        onTogglePreview={onTogglePreview}
+        onZoomOut={onZoomOut}
+        onZoomIn={onZoomIn}
+        onResetZoom={onResetZoom}
+      />
+    );
+    expect(screen.getByRole("button", { name: "退出预览" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "放大文档" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "重置文档缩放" }));
+    expect(onResetZoom).toHaveBeenCalledOnce();
+  });
+
   it("renders a compact heading outline and navigates by slug", () => {
     const onSelect = vi.fn();
     render(<DocumentOutline markdown={"# First\n\n## Second"} onSelect={onSelect} />);

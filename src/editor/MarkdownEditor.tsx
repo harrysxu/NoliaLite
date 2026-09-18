@@ -3,7 +3,7 @@ import { MarkdownManager } from "@tiptap/markdown";
 import { NodeSelection, Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { EditorContent, useEditor } from "@tiptap/react";
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import type { PreferredEol } from "../bridge/contracts";
 import { importDocumentImage, pickImageFiles } from "../bridge/tauriClient";
@@ -62,6 +62,8 @@ type Props = {
   filePath?: string;
   preferredEol: PreferredEol;
   editable: boolean;
+  preview?: boolean;
+  zoomScale?: number;
   autofocus?: boolean;
   onChange: (markdown: string) => void;
   onOpenLink?: (href: string, options: { newWindow: boolean }) => void;
@@ -225,9 +227,10 @@ async function waitForExportAssets(root: HTMLElement): Promise<void> {
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function MarkdownEditor(
-  { value, filePath, preferredEol, editable, autofocus, onChange, onOpenLink, onError },
+  { value, filePath, preferredEol, editable, preview = false, zoomScale = 1, autofocus, onChange, onOpenLink, onError },
   ref
 ) {
+  const effectiveEditable = editable && !preview;
   const [sourceMode, setSourceMode] = useState(false);
   const [sourceValue, setSourceValue] = useState(value);
   const [diagramViewer, setDiagramViewer] = useState<DiagramViewerContent>();
@@ -305,6 +308,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
           return currentEditor ? openLinkMarkdownEditorAtPosition(currentEditor, position, anchor) : true;
         }
         if (target?.closest("ul[data-type='taskList'] li > label")) return false;
+        if (!view.editable) return false;
         if (isMarkdownSyntaxEditorActive(view)) return true;
         const currentEditor = editorInstanceRef.current;
         if (currentEditor && openMarkdownSyntaxEditorAtPosition(currentEditor, position, target, event)) {
@@ -324,8 +328,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   editorInstanceRef.current = editor;
 
   useEffect(() => {
+    if (!editor || editor.isDestroyed || editor.isEditable === effectiveEditable) return;
+    editor.setEditable(effectiveEditable, false);
+  }, [editor, effectiveEditable]);
+
+  useEffect(() => {
     if (!editor) return;
     const openLocalMarkdown = (event: MouseEvent) => {
+      if (!editor.isEditable) return;
       const eventTarget = event.target instanceof Element ? event.target : undefined;
       const hitTarget = typeof document.elementFromPoint === "function"
         ? document.elementFromPoint(event.clientX, event.clientY)
@@ -359,6 +369,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
     editor.view.dom.addEventListener("mousedown", openLocalMarkdown, true);
     return () => editor.view.dom.removeEventListener("mousedown", openLocalMarkdown, true);
   }, [editor]);
+
+  useEffect(() => {
+    if (!preview) return;
+    setSourceMode(false);
+    setLinkEditor(undefined);
+    setTableInsertOpen(false);
+    if (editor) clearMarkdownSyntaxEditor(editor.view);
+  }, [editor, preview]);
 
   useEffect(() => {
     if (linkEditor) linkInputRef.current?.focus();
@@ -444,6 +462,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   useImperativeHandle(ref, () => ({
     focus: () => sourceMode ? sourceEditorRef.current?.focus() : editor?.commands.focus(),
     toggleSource: () => {
+      if (preview) return;
       if (sourceMode) {
         exitSourceMode();
         return;
@@ -481,8 +500,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
       return true;
     },
     editLink: () => { if (sourceMode) onError?.("请先退出源码模式再编辑链接。"); else openLinkEditor(); },
-    undo: () => { editor?.commands.undo(); },
-    redo: () => { editor?.commands.redo(); },
+    undo: () => { if (editor?.isEditable) editor.commands.undo(); },
+    redo: () => { if (editor?.isEditable) editor.commands.redo(); },
     insertTable: () => {
       if (sourceMode) onError?.("请先退出源码模式再插入表格。");
       else if (editor?.isEditable) setTableInsertOpen(true);
@@ -517,26 +536,33 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
       ? sourceEditorRef.current?.find(query, direction) ?? { current: 0, total: 0 }
       : editor ? selectMatch(editor, query, direction) : { current: 0, total: 0 },
     jumpToHeading: (reference) => editor ? jumpToHeading(editor, reference) : false
-  }), [editor, onError, preferredEol, sourceMode, sourceValue, value]);
+  }), [editor, effectiveEditable, onError, preferredEol, preview, sourceMode, sourceValue, value]);
 
   if (!editor) return <div className="editor-loading" aria-label="正在载入文档" />;
 
   return (
-    <div className={`editor-host${sourceMode ? " source-mode" : ""}`}>
+    <div
+      className={`editor-host${sourceMode ? " source-mode" : ""}${preview ? " is-preview" : ""}`}
+      data-preview={preview ? "true" : "false"}
+    >
       {sourceMode ? (
-        <SourceEditor
-          ref={sourceEditorRef}
-          value={sourceValue}
-          editable={editable}
-          autofocus
-          onChange={changeSource}
-          onExit={() => {
-            exitSourceMode();
-          }}
-        />
+        <div className="editor-zoom-surface" style={{ "--editor-zoom": zoomScale } as CSSProperties}>
+          <SourceEditor
+            ref={sourceEditorRef}
+            value={sourceValue}
+            editable={effectiveEditable}
+            autofocus
+            onChange={changeSource}
+            onExit={() => {
+              exitSourceMode();
+            }}
+          />
+        </div>
       ) : null}
       <div className="rendered-editor" hidden={sourceMode}>
-        <EditorContent editor={editor} />
+        <div className="editor-zoom-surface" style={{ "--editor-zoom": zoomScale } as CSSProperties}>
+          <EditorContent editor={editor} />
+        </div>
         <TableToolbar editor={editor} />
         <CodeLanguageControl editor={editor} />
         <TableInsertDialog

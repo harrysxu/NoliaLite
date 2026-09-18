@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
 import { Editor, type JSONContent } from "@tiptap/core";
-import { TextSelection } from "@tiptap/pm/state";
+import { MarkdownManager } from "@tiptap/markdown";
+import { AllSelection, TextSelection } from "@tiptap/pm/state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createEditorExtensions, isAllowedLink } from "./extensions";
+import { parseTrackedMarkdown } from "./sourceDocument";
 
 const imageBridge = vi.hoisted(() => ({
   storeDocumentImage: vi.fn(async () => "assets/cover.png")
@@ -139,6 +141,44 @@ describe("Markdown editor extensions", () => {
     const target = new Editor({ extensions: createEditorExtensions(), content: "" });
     expect(runPaste(target, pasteEvent(values.get("text/plain") ?? "", values.get("text/html") ?? ""))).toBe(true);
     expect(target.state.doc.firstChild?.firstChild?.marks[0]?.type.name).toBe("bold");
+    source.destroy();
+    target.destroy();
+  });
+
+  it("copies a full document as its original Markdown source", () => {
+    const sourceMarkdown = "# 标题\n\n- 第一项\n- 第二项\n\n**粗体**\n\n```ts\nconst value = 1;\n```\n";
+    const extensions = createEditorExtensions();
+    const manager = new MarkdownManager({ extensions });
+    const source = new Editor({
+      extensions,
+      content: parseTrackedMarkdown(sourceMarkdown, manager)
+    });
+    source.view.dispatch(source.state.tr.setSelection(new AllSelection(source.state.doc)));
+    const values = new Map<string, string>();
+    const copyEvent = {
+      clipboardData: { setData: (type: string, value: string) => values.set(type, value) },
+      preventDefault: vi.fn()
+    } as unknown as ClipboardEvent;
+    let copied = false;
+    source.view.someProp("handleDOMEvents", (handlers) => {
+      copied = handlers.copy?.(source.view, copyEvent) || copied;
+      return copied;
+    });
+
+    expect(copied).toBe(true);
+    expect(values.get("text/plain")).toBe(sourceMarkdown);
+    expect(values.get("text/markdown")).toBe(sourceMarkdown);
+
+    const target = new Editor({ extensions: createEditorExtensions(), content: "旧内容" });
+    target.view.dispatch(target.state.tr.setSelection(new AllSelection(target.state.doc)));
+    expect(runPaste(target, pasteEvent(
+      values.get("text/plain") ?? "",
+      values.get("text/html") ?? "",
+      values.get("text/markdown") ?? ""
+    ))).toBe(true);
+    expect(target.state.doc.content.child(0).type.name).toBe("heading");
+    expect(target.state.doc.content.child(1).type.name).toBe("bulletList");
+    expect(target.state.doc.content.child(3).type.name).toBe("codeBlock");
     source.destroy();
     target.destroy();
   });
@@ -282,10 +322,16 @@ describe("Markdown editor extensions", () => {
   });
 });
 
-function pasteEvent(text: string, html: string) {
+function pasteEvent(text: string, html: string, markdown = "") {
   return {
     clipboardData: {
-      getData: (type: string) => type === "text/plain" ? text : type === "text/html" ? html : ""
+      getData: (type: string) => type === "text/plain"
+        ? text
+        : type === "text/html"
+          ? html
+          : type === "text/markdown"
+            ? markdown
+            : ""
     },
     preventDefault: vi.fn()
   } as unknown as ClipboardEvent & { preventDefault: ReturnType<typeof vi.fn> };

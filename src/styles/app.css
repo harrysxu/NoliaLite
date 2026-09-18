@@ -349,6 +349,59 @@
   overscroll-behavior-y: contain;
 }
 
+.document-controls {
+  position: absolute;
+  z-index: 10;
+  top: 52px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 2px 8px rgb(24 28 32 / 8%);
+  backdrop-filter: blur(8px);
+}
+
+.document-controls button {
+  display: grid;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 5px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.document-controls button:hover:not(:disabled),
+.document-controls button.is-active {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.document-controls button:disabled {
+  color: var(--text-faint);
+  cursor: default;
+  opacity: 0.45;
+}
+
+.document-controls-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--border);
+}
+
+.document-zoom-value {
+  width: 42px;
+}
+
 .document-layout {
   display: flex;
   min-height: 100%;
@@ -441,6 +494,7 @@ html.is-pdf-exporting .history-view,
 html.is-pdf-exporting .document-outline,
 html.is-pdf-exporting .status-banner,
 html.is-pdf-exporting .find-bar,
+html.is-pdf-exporting .document-controls,
 html.is-pdf-exporting .dialog-backdrop,
 html.is-pdf-exporting .diagram-viewer-layer,
 html.is-pdf-exporting .selection-toolbar,
@@ -505,6 +559,7 @@ html.is-pdf-exporting .nolia-editor .ProseMirror-selectednode {
   .document-outline,
   .status-banner,
   .find-bar,
+  .document-controls,
   .dialog-backdrop,
   .diagram-viewer-layer,
   .selection-toolbar,

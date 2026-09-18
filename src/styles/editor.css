@@ -6,6 +6,18 @@
   padding: clamp(28px, 5vh, 44px) 0 max(96px, 18vh);
 }
 
+.editor-host.is-preview {
+  padding-top: clamp(36px, 6vh, 56px);
+}
+
+.editor-zoom-surface {
+  zoom: var(--editor-zoom, 1);
+}
+
+.editor-host.is-preview .nolia-editor {
+  cursor: default;
+}
+
 .rendered-editor[hidden] {
   display: none;
 }

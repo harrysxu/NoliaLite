@@ -811,6 +811,22 @@ fn application_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[
             &MenuItem::with_id(app, "format.source", "源码模式", true, Some("CmdOrCtrl+/"))?,
+            &MenuItem::with_id(
+                app,
+                "view.preview",
+                "预览文档",
+                true,
+                Some("CmdOrCtrl+Shift+P"),
+            )?,
+            &MenuItem::with_id(app, "view.zoom_out", "缩小文档", true, Some("CmdOrCtrl+-"))?,
+            &MenuItem::with_id(
+                app,
+                "view.zoom_reset",
+                "重置文档缩放",
+                true,
+                Some("CmdOrCtrl+Shift+0"),
+            )?,
+            &MenuItem::with_id(app, "view.zoom_in", "放大文档", true, Some("CmdOrCtrl+="))?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::fullscreen(app, Some("进入全屏幕"))?,
         ],
@@ -875,7 +891,8 @@ pub fn run() {
                 begin_quit(app);
             } else if (id.starts_with("file.")
                 || id.starts_with("edit.")
-                || id.starts_with("format."))
+                || id.starts_with("format.")
+                || id.starts_with("view."))
                 && let Some(window) = focused_window(app)
             {
                 let _ = window.emit_to(window.label(), "menu-command", id);

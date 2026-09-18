@@ -46,6 +46,29 @@ function replaceSource(source: HTMLElement, markdown: string): void {
 }
 
 describe("MarkdownEditor interactions", () => {
+  it("keeps preview mode read-only and hides source editing", async () => {
+    const ref = createRef<MarkdownEditorHandle>();
+    const { container } = render(
+      <MarkdownEditor
+        ref={ref}
+        value="## 标题\n\n正文 **加粗**"
+        preferredEol="lf"
+        editable
+        preview
+        onChange={() => undefined}
+      />
+    );
+    const editor = await screen.findByLabelText("Markdown 文档");
+    await waitFor(() => expect(editor.getAttribute("contenteditable")).toBe("false"));
+    act(() => ref.current!.toggleSource());
+    expect(screen.queryByRole("textbox", { name: "Markdown 源码" })).toBeNull();
+    const heading = container.querySelector("h2");
+    expect(heading).toBeTruthy();
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => heading });
+    fireEvent.mouseDown(heading!, { button: 0, clientX: 1, clientY: 1 });
+    expect(screen.queryByRole("textbox", { name: "标题 Markdown 源码" })).toBeNull();
+  });
+
   it("edits heading markers as local Markdown", async () => {
     const onChange = vi.fn();
     const { container } = render(

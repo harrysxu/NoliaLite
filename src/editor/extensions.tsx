@@ -19,7 +19,13 @@ import { useEffect, useState } from "react";
 import { readLocalImage, storeDocumentImage } from "../bridge/tauriClient";
 import { MermaidBlock, type DiagramViewerContent } from "./MermaidBlock";
 import { FootnoteBlock, FootnoteReference, InlineMath, MathBlock, SafeHtmlBlock } from "./ComplexBlocks";
-import { decodeProtectedRaw, parseTrackedMarkdown, TRACKING_ATTRIBUTES, type ProtectedKind } from "./sourceDocument";
+import {
+  decodeProtectedRaw,
+  parseTrackedMarkdown,
+  serializeTrackedMarkdown,
+  TRACKING_ATTRIBUTES,
+  type ProtectedKind
+} from "./sourceDocument";
 
 const lowlight = createLowlight(common);
 
@@ -428,11 +434,12 @@ const PlainTextPaste = Extension.create({
             const clipboard = event.clipboardData;
             if (!clipboard) return false;
             const text = clipboard.getData("text/plain");
+            const markdown = clipboard.getData("text/markdown");
             const html = clipboard.getData("text/html");
             const internalMarkdown = markdownFromInternalClipboard(html);
-            if (internalMarkdown) {
+            if (markdown || internalMarkdown) {
               event.preventDefault();
-              return insertMarkdownAtSelection(editor, view, internalMarkdown);
+              return insertMarkdownAtSelection(editor, view, markdown || internalMarkdown!);
             }
             if (html) {
               event.preventDefault();
@@ -464,11 +471,18 @@ const MarkdownNodeCopy = Extension.create({
               if (!clipboard) return false;
               const selectedNode = selection instanceof NodeSelection ? selection.node : undefined;
               const code = codeTextForSelection(selection);
-              const markdown = code === undefined ? markdownForSelection(editor, selectedNode) : undefined;
+              const wholeDocument = isWholeDocumentSelection(selection, view.state.doc);
+              const markdown = code === undefined
+                ? wholeDocument
+                  ? markdownForDocument(editor)
+                  : markdownForSelection(editor, selectedNode)
+                : undefined;
               const visibleText = code ?? plainTextForSelection(selection, selectedNode);
               // Atom nodes such as Mermaid have no rendered text to expose;
               // retain their source as the only useful clipboard fallback.
-              const text = visibleText || (code === undefined ? markdown : undefined);
+              const text = wholeDocument && markdown
+                ? markdown
+                : visibleText || (code === undefined ? markdown : undefined);
               if (!text || (code === undefined && !markdown)) return false;
               const slice = selection.content();
               const wrapper = document.createElement("div");
@@ -478,6 +492,7 @@ const MarkdownNodeCopy = Extension.create({
               }
               wrapper.append(DOMSerializer.fromSchema(view.state.schema).serializeFragment(slice.content));
               clipboard.setData("text/plain", text);
+              if (code === undefined && markdown) clipboard.setData("text/markdown", markdown);
               clipboard.setData("text/html", wrapper.outerHTML);
               event.preventDefault();
               return true;
@@ -496,6 +511,10 @@ function codeTextForSelection(selection: Selection): string | undefined {
   const { $from, $to } = selection;
   if (!$from.sameParent($to) || $from.parent.type.name !== "codeBlock") return undefined;
   return $from.parent.textBetween($from.parentOffset, $to.parentOffset, "\n");
+}
+
+function isWholeDocumentSelection(selection: Selection, documentNode: ProseMirrorNode): boolean {
+  return selection.from <= 1 && selection.to >= documentNode.content.size;
 }
 
 function plainTextForSelection(selection: Selection, selectedNode?: ProseMirrorNode): string {
@@ -525,6 +544,16 @@ function markdownForSelection(editor: Editor, selectedNode?: ProseMirrorNode): s
       return manager.serialize({ type: "doc", content: [parent.toJSON()] }).trimEnd();
     }
     return manager.serialize({ type: "doc", content: content.map((node) => node.toJSON()) }).trimEnd();
+  } catch {
+    return undefined;
+  }
+}
+
+function markdownForDocument(editor: Editor): string | undefined {
+  const manager = editor.markdown;
+  if (!manager) return undefined;
+  try {
+    return serializeTrackedMarkdown(editor.getJSON(), manager, "lf");
   } catch {
     return undefined;
   }
